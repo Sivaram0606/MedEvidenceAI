@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedEvidence AI • Assistive Clinical Research &amp; Literature Copilot</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Top Clinical Header -->
+  <header class="app-header">
+    <div class="brand-group">
+      <div class="brand-logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M12 2v20M2 12h20" stroke-linecap="round"/>
+          <circle cx="12" cy="12" r="9" stroke-opacity="0.35"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title-row">
+          <h1>MedEvidence AI</h1>
+          <span class="badge-pill badge-teal">Assistive Physician Research Copilot</span>
+          <span class="badge-pill badge-indigo">Open-Source Research APIs</span>
+        </div>
+        <p class="brand-subtitle">FHIR-Contextualized Literature Synthesis Across PubMed, Europe PMC, OpenAlex &amp; ClinicalTrials.gov v2</p>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <div class="case-selector-wrap">
+        <label for="caseSelect">Patient FHIR Cohort:</label>
+        <select id="caseSelect" class="case-select"></select>
+      </div>
+      <button id="openFhirModalBtn" class="btn btn-secondary" title="Upload FHIR Bundle JSON or Fetch from FHIR Server">
+        <span>+ Import / Fetch FHIR</span>
+      </button>
+      <button id="openJournalsModalBtn" class="btn btn-outline-indigo" title="View Strict Reputed Medical Journal Whitelist &amp; Open APIs">
+        <span id="journalCountBadge">22 Reputed Journals &amp; 4 Open APIs</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Physician-in-the-Loop Governance Notice -->
+  <div style="background:rgba(20,184,166,0.1);border-bottom:1px solid rgba(45,212,191,0.25);padding:6px 20px;font-size:12px;color:#cbd5e1;display:flex;justify-content:space-between;align-items:center;">
+    <span><strong style="color:#2dd4bf;">Physician-Led Assistive Research Tool:</strong> Summarizes peer-reviewed clinical trials, subgroup outcomes, and society guidelines for independent physician evaluation. Does not issue autonomous medical orders.</span>
+    <span id="openApiStatusBadges" style="display:flex;gap:6px;font-size:11px;"></span>
+  </div>
+
+  <!-- Main 3-Column Point-of-Care Workstation -->
+  <main class="workstation-grid">
+    <!-- LEFT PANEL: Patient FHIR R4 Clinical Context -->
+    <section class="panel panel-left">
+      <div class="panel-header">
+        <h2>Patient HL7 FHIR R4 Context</h2>
+        <span class="fhir-status-tag">FHIR R4 Phenotype</span>
+      </div>
+
+      <!-- Patient Banner -->
+      <div id="patientBanner" class="patient-banner"></div>
+
+      <!-- Subgroup & Pharmacological Literature Context -->
+      <div id="safetyAlertsContainer" class="safety-alerts-container"></div>
+
+      <!-- Chart Navigation Tabs -->
+      <div class="chart-tabs">
+        <button class="chart-tab active" data-tab="tab-labs">Labs &amp; Vitals</button>
+        <button class="chart-tab" data-tab="tab-conditions">Conditions</button>
+        <button class="chart-tab" data-tab="tab-meds">Meds &amp; Allergies</button>
+        <button class="chart-tab" data-tab="tab-raw-fhir">FHIR JSON</button>
+      </div>
+
+      <!-- Tab Contents -->
+      <div class="chart-tab-body">
+        <div id="tab-labs" class="tab-pane active"></div>
+        <div id="tab-conditions" class="tab-pane"></div>
+        <div id="tab-meds" class="tab-pane"></div>
+        <div id="tab-raw-fhir" class="tab-pane">
+          <pre id="rawFhirPre" class="raw-fhir-pre"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- CENTER PANEL: Assistive Research Inquiry & Literature Synthesis -->
+    <section class="panel panel-center">
+      <!-- Query Input Card -->
+      <div class="query-card">
+        <div class="query-card-header">
+          <div>
+            <h2>Assistive Clinical Literature Inquiry</h2>
+            <p class="text-muted">Explore trial outcomes, subgroup analyses, and diagnostic criteria from peer-reviewed journals matching this patient's FHIR profile.</p>
+          </div>
+          <span id="engineBadge" class="engine-badge">Gemini Flash 3.8 Ready</span>
+        </div>
+
+        <div id="suggestedQuestionsWrap" class="suggested-questions"></div>
+
+        <div class="query-input-group">
+          <textarea
+            id="physicianQuestionInput"
+            rows="3"
+            placeholder="Enter clinical research question..."
+          ></textarea>
+          <button id="runSynthesisBtn" class="btn btn-primary">
+            <span id="runBtnText">Synthesize Research Evidence</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Multi-Agent Execution Pipeline Tracker -->
+      <div id="agentTraceSection" class="agent-trace-section">
+        <div class="section-title-row">
+          <h3>Multi-Agent Research Pipeline Trace</h3>
+          <span id="pipelineDurationBadge" class="duration-badge"></span>
+        </div>
+        <div id="agentTraceGrid" class="agent-trace-grid"></div>
+      </div>
+
+      <!-- Synthesis Results Container -->
+      <div id="synthesisResultsContainer" class="synthesis-results-container">
+        <!-- Executive Literature Synthesis & Key Trial Findings -->
+        <div class="result-card highlight-card">
+          <div class="result-card-header">
+            <h3>Peer-Reviewed Literature Synthesis &amp; Trial Findings</h3>
+            <span class="citation-hint">Click any [PMID] badge to inspect journal source &rarr;</span>
+          </div>
+          <div id="primaryDiagnosisBanner" class="primary-dx-banner"></div>
+          <div id="keyTakeawaysBox" class="takeaways-box"></div>
+          <div id="pointOfCareAnswerBox" class="poc-answer-body"></div>
+        </div>
+
+        <!-- Diagnostic Cohort Parallels & Published Workup Criteria -->
+        <div class="result-card">
+          <div class="result-card-header">
+            <h3>Diagnostic Cohort Parallels &amp; Published Evaluation Criteria</h3>
+            <span class="sub-badge">Agent 3 • Diagnostic Literature Analyzer</span>
+          </div>
+          <div id="differentialList" class="differential-list"></div>
+        </div>
+
+        <!-- Comparative Therapeutic Evidence Matrix -->
+        <div class="result-card">
+          <div class="result-card-header">
+            <h3>Comparative Therapeutic Evidence Matrix (Published RCTs &amp; Guidelines)</h3>
+            <span class="sub-badge">Agent 4 • Trial Outcome Synthesizer</span>
+          </div>
+          <div id="treatmentPlanList" class="treatment-plan-list"></div>
+        </div>
+
+        <!-- Trial Exclusion Criteria & Published Biomarker Endpoints -->
+        <div class="two-col-cards">
+          <div class="result-card warning-card">
+            <h4>Trial Exclusion Criteria &amp; Subgroup Pharmacology Notes</h4>
+            <ul id="warningsList" class="clinical-list"></ul>
+          </div>
+          <div class="result-card monitoring-card">
+            <h4>Published Study Endpoints &amp; Biomarker Kinetics</h4>
+            <ul id="monitoringList" class="clinical-list"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL: Open-Source Journal Evidence & ClinicalTrials.gov v2 -->
+    <section class="panel panel-right">
+      <div class="panel-header">
+        <div>
+          <h2>Open-Source Research Evidence</h2>
+          <p class="panel-subtitle">PubMed &bull; Europe PMC &bull; OpenAlex &bull; ClinicalTrials.gov v2</p>
+        </div>
+        <span id="articlesCountBadge" class="badge-pill badge-indigo">0 Sources</span>
+      </div>
+
+      <!-- Journal Filter Chips -->
+      <div id="journalFilterBar" class="journal-filter-bar"></div>
+
+      <!-- Retrieved Articles & Clinical Trials List -->
+      <div id="articlesContainer" class="articles-container"></div>
+    </section>
+  </main>
+
+  <!-- MODAL 1: Import / Fetch Custom FHIR R4 Bundle -->
+  <div id="fhirModal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Import or Fetch HL7 FHIR R4 Patient Bundle</h3>
+        <button id="closeFhirModalBtn" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Option 1: Fetch from External FHIR R4 REST Endpoint URL</label>
+          <div class="url-fetch-row">
+            <input
+              type="url"
+              id="fhirUrlInput"
+              placeholder="https://hapi.fhir.org/baseR4/Patient/example"
+              class="text-input"
+            />
+            <button id="fetchFhirUrlBtn" class="btn btn-secondary">Fetch URL</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Option 2: Paste or Upload HL7 FHIR R4 Bundle JSON</label>
+          <input type="file" id="fhirFileInput" accept=".json,application/json" class="file-input" />
+          <textarea
+            id="customFhirJsonTextarea"
+            rows="10"
+            class="code-textarea"
+            placeholder='{"resourceType": "Bundle", "type": "collection", "entry": [...]}'
+          ></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="loadCustomFhirBtn" class="btn btn-primary">Parse &amp; Load Patient FHIR Context</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 2: Strict Reputed Medical Journal Whitelist & Open APIs -->
+  <div id="journalsModal" class="modal-backdrop hidden">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3>Open-Source Research APIs &amp; 22 Whitelisted Medical Journals</h3>
+          <p class="text-muted">Agent 2 queries live open-source biomedical APIs (NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2) strictly filtered to these peer-reviewed journals.</p>
+        </div>
+        <button id="closeJournalsModalBtn" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="journalsTableContainer" class="journals-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
