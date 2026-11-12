@@ -1,5 +1,5 @@
 /**
- * Frontend Application Logic for MedEvidence AI:
+ * Frontend Application Logic for MedEvidenceAI:
  * Point-of-Care Literature Synthesis, Differential Diagnosis & Precision Treatment Agentic System.
  */
 

@@ -1,4 +1,4 @@
-# MedEvidence AI • Assistive Clinical Research & Literature Copilot
+# MedEvidenceAI • Assistive Clinical Research & Literature Copilot
 
 A physician-led, non-prescriptive **Assistive Clinical Research & Literature Synthesis** system powered by **Gemini Flash 3.8 (`gemini-3.8-flash`)**. It extracts clinical context from **HL7 FHIR R4 Bundles** and queries **4 live open-source biomedical research APIs**—strictly filtered to **22 high-impact, peer-reviewed medical journals**—to present trial outcomes, cohort parallels, and subgroup analyses for independent physician evaluation.
 
@@ -21,6 +21,10 @@ A physician-led, non-prescriptive **Assistive Clinical Research & Literature Syn
 ## How to Run
 
 ```bash
+git clone https://github.com/Sivaram0606/MedEvidenceAI.git
+cd MedEvidenceAI
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 

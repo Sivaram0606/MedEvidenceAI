@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(
-    title="MedEvidence AI • Point-of-Care FHIR & Reputed Journal Agentic System",
+    title="MedEvidenceAI • Point-of-Care FHIR & Reputed Journal Agentic System",
     version="1.0.0",
     description="Multi-Agent Clinical Decision Support & Literature Synthesis strictly grounded in HL7 FHIR R4 patient data and high-impact peer-reviewed medical journals.",
 )
@@ -50,7 +50,7 @@ class SynthesizeRequest(BaseModel):
 async def health_check() -> Dict[str, Any]:
     return {
         "status": "healthy",
-        "service": "MedEvidence Point-of-Care Agentic System",
+        "service": "MedEvidenceAI Point-of-Care Agentic System",
         "whitelisted_journals": len(REPUTED_MEDICAL_JOURNALS),
         "sample_cases": len(SAMPLE_FHIR_CASES),
     }
