@@ -23,34 +23,36 @@
           <span class="badge-pill badge-teal">Assistive Physician Research Copilot</span>
           <span class="badge-pill badge-indigo">Open-Source Research APIs</span>
         </div>
-        <p class="brand-subtitle">FHIR-Contextualized Literature Synthesis Across PubMed, Europe PMC, OpenAlex &amp; ClinicalTrials.gov v2</p>
+        <p id="brandSubtitle" class="brand-subtitle">FHIR-Contextualized Literature Synthesis Across PubMed, Europe PMC, OpenAlex &amp; ClinicalTrials.gov v2</p>
       </div>
     </div>
 
     <div class="header-controls">
-      <div class="case-selector-wrap">
-        <label for="caseSelect">Patient FHIR Cohort:</label>
-        <select id="caseSelect" class="case-select"></select>
+      <div id="fhirHeaderControls" class="fhir-header-controls">
+        <div class="case-selector-wrap">
+          <label for="caseSelect">Patient FHIR Cohort:</label>
+          <select id="caseSelect" class="case-select"></select>
+        </div>
+        <button id="openFhirModalBtn" class="btn btn-secondary" title="Upload FHIR Bundle JSON or Fetch from FHIR Server">
+          <span>+ Import / Fetch FHIR</span>
+        </button>
       </div>
-      <button id="openFhirModalBtn" class="btn btn-secondary" title="Upload FHIR Bundle JSON or Fetch from FHIR Server">
-        <span>+ Import / Fetch FHIR</span>
-      </button>
-      <button id="openJournalsModalBtn" class="btn btn-outline-indigo" title="View Strict Reputed Medical Journal Whitelist &amp; Open APIs">
+      <button id="openJournalsModalBtn" class="btn btn-outline-indigo" title="View or Customize Whitelisted Medical Journals &amp; Open APIs">
         <span id="journalCountBadge">22 Reputed Journals &amp; 4 Open APIs</span>
       </button>
     </div>
   </header>
 
   <!-- Physician-in-the-Loop Governance Notice -->
-  <div style="background:rgba(20,184,166,0.1);border-bottom:1px solid rgba(45,212,191,0.25);padding:6px 20px;font-size:12px;color:#cbd5e1;display:flex;justify-content:space-between;align-items:center;">
+  <div class="governance-banner">
     <span><strong style="color:#2dd4bf;">Physician-Led Assistive Research Tool:</strong> Summarizes peer-reviewed clinical trials, subgroup outcomes, and society guidelines for independent physician evaluation. Does not issue autonomous medical orders.</span>
     <span id="openApiStatusBadges" style="display:flex;gap:6px;font-size:11px;"></span>
   </div>
 
   <!-- Main 3-Column Point-of-Care Workstation -->
-  <main class="workstation-grid">
+  <main id="workstationGrid" class="workstation-grid">
     <!-- LEFT PANEL: Patient FHIR R4 Clinical Context -->
-    <section class="panel panel-left">
+    <section id="panelLeftFhir" class="panel panel-left">
       <div class="panel-header">
         <h2>Patient HL7 FHIR R4 Context</h2>
         <span class="fhir-status-tag">FHIR R4 Phenotype</span>
@@ -82,15 +84,58 @@
     </section>
 
     <!-- CENTER PANEL: Assistive Research Inquiry & Literature Synthesis -->
-    <section class="panel panel-center">
+    <section id="panelCenter" class="panel panel-center">
       <!-- Query Input Card -->
       <div class="query-card">
+        <!-- Radio Button Selector: With FHIR Context vs Direct Query Without FHIR Context -->
+        <div class="question-mode-selector" role="radiogroup" aria-label="Select Clinical Query Mode">
+          <span class="question-mode-prompt">Query Mode:</span>
+          <div class="question-mode-radios">
+            <label id="labelModeFhir" class="qmode-radio-option active" for="modeFhirRadio">
+              <input
+                type="radio"
+                id="modeFhirRadio"
+                name="clinicalQueryMode"
+                value="fhir"
+                checked
+              />
+              <span class="qmode-radio-content">
+                <span class="qmode-radio-title">With FHIR Context</span>
+                <span class="qmode-radio-desc">Auto-generated query from selected patient</span>
+              </span>
+            </label>
+
+            <label id="labelModeDirect" class="qmode-radio-option" for="modeDirectRadio">
+              <input
+                type="radio"
+                id="modeDirectRadio"
+                name="clinicalQueryMode"
+                value="direct"
+              />
+              <span class="qmode-radio-content">
+                <span class="qmode-radio-title">Direct Query (Without FHIR Context)</span>
+                <span class="qmode-radio-desc">Plain query for research articles on any condition</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
         <div class="query-card-header">
           <div>
-            <h2>Assistive Clinical Literature Inquiry</h2>
-            <p class="text-muted">Explore trial outcomes, subgroup analyses, and diagnostic criteria from peer-reviewed journals matching this patient's FHIR profile.</p>
+            <h2 id="inquiryTitle">Assistive Clinical Literature Inquiry</h2>
+            <p id="inquirySubtitle" class="text-muted">Explore trial outcomes, subgroup analyses, and diagnostic criteria from peer-reviewed journals matching this patient's FHIR profile.</p>
           </div>
           <span id="engineBadge" class="engine-badge">Gemini Flash 3.8 Ready</span>
+        </div>
+
+        <!-- Auto-Generated FHIR Query Status Bar -->
+        <div id="autoQueryStatusRow" class="auto-query-status-row">
+          <span id="autoQueryPatientLabel" class="auto-query-label">
+            &#10024; Query auto-generated from selected patient's FHIR R4 chart
+          </span>
+          <button type="button" id="regenerateFhirQueryBtn" class="auto-query-regen-btn" title="Re-generate query from selected patient's FHIR profile">
+            &#8635; Auto-Generate Query
+          </button>
         </div>
 
         <div id="suggestedQuestionsWrap" class="suggested-questions"></div>
@@ -132,7 +177,7 @@
         <!-- Diagnostic Cohort Parallels & Published Workup Criteria -->
         <div class="result-card">
           <div class="result-card-header">
-            <h3>Diagnostic Cohort Parallels &amp; Published Evaluation Criteria</h3>
+            <h3 id="dxCardHeading">Diagnostic Cohort Parallels &amp; Published Evaluation Criteria</h3>
             <span class="sub-badge">Agent 3 • Diagnostic Literature Analyzer</span>
           </div>
           <div id="differentialList" class="differential-list"></div>
@@ -162,7 +207,7 @@
     </section>
 
     <!-- RIGHT PANEL: Open-Source Journal Evidence & ClinicalTrials.gov v2 -->
-    <section class="panel panel-right">
+    <section id="panelRightArticles" class="panel panel-right">
       <div class="panel-header">
         <div>
           <h2>Open-Source Research Evidence</h2>
@@ -216,17 +261,61 @@
     </div>
   </div>
 
-  <!-- MODAL 2: Strict Reputed Medical Journal Whitelist & Open APIs -->
+  <!-- MODAL 2: Reputed Medical Journal Whitelist & Open APIs (Add / Remove / Restore) -->
   <div id="journalsModal" class="modal-backdrop hidden">
     <div class="modal-card modal-lg">
       <div class="modal-header">
         <div>
-          <h3>Open-Source Research APIs &amp; 22 Whitelisted Medical Journals</h3>
-          <p class="text-muted">Agent 2 queries live open-source biomedical APIs (NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2) strictly filtered to these peer-reviewed journals.</p>
+          <h3>Open-Source Research APIs &amp; Whitelisted Medical Journals</h3>
+          <p class="text-muted">Agent 2 queries live open-source biomedical APIs (NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2) strictly filtered to your active peer-reviewed journals.</p>
         </div>
-        <button id="closeJournalsModalBtn" class="modal-close">&times;</button>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+          <button type="button" id="modalResetJournalsBtn" class="btn btn-secondary btn-sm">Restore Default 22</button>
+          <button id="closeJournalsModalBtn" class="modal-close">&times;</button>
+        </div>
       </div>
       <div class="modal-body">
+        <!-- Add Custom Journal Form -->
+        <div class="journal-add-box">
+          <div class="journal-add-title">Add a Medical Journal</div>
+          <div class="journal-add-grid">
+            <input
+              type="text"
+              id="customJournalNameInput"
+              class="text-input"
+              placeholder="Journal Title or Abbrev (e.g., Stroke, Journal of Clinical Oncology, Thorax)"
+            />
+            <input
+              type="text"
+              id="customJournalAbbrevInput"
+              class="text-input"
+              placeholder="PubMed Abbrev (optional, e.g., J Clin Oncol)"
+            />
+            <input
+              type="text"
+              id="customJournalCategoryInput"
+              class="text-input"
+              placeholder="Specialty (optional)"
+            />
+            <button type="button" id="addCustomJournalBtn" class="btn btn-primary">+ Add Journal</button>
+          </div>
+          <div class="suggested-journals-section">
+            <span class="suggested-label">Quick-Add Journals:</span>
+            <div id="suggestedJournalsWrap" class="suggested-questions" style="margin-bottom:0;"></div>
+          </div>
+        </div>
+
+        <div class="active-journals-toolbar">
+          <strong id="modalActiveJournalsCount">Active Reputed Journals (22)</strong>
+          <input
+            type="text"
+            id="modalJournalSearchInput"
+            class="text-input input-sm"
+            style="max-width:260px;"
+            placeholder="Filter active journals..."
+          />
+        </div>
+
         <div id="journalsTableContainer" class="journals-grid"></div>
       </div>
     </div>

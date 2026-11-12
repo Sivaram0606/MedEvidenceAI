@@ -10,16 +10,63 @@ Designed strictly as a non-prescriptive Physician Research Copilot:
 
 import json
 import os
+import re
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 from backend.fhir_parser import parse_fhir_bundle
 from backend.pubmed_journal_tool import (
     search_pubmed_reputed_journals,
+    get_active_journals,
     REPUTED_MEDICAL_JOURNALS,
     OPEN_SOURCE_RESEARCH_APIS,
 )
+
+
+_CONVERSATIONAL_STOPWORDS = {
+    "a", "about", "an", "analyses", "analysis", "and", "any", "are", "article", "articles",
+    "as", "at", "be", "between", "by", "can", "clinical", "cohort", "cohorts", "compare",
+    "comparing", "comparative", "condition", "conditions", "consensus", "controlled",
+    "current", "data", "describe", "direct", "discuss", "disease", "disorder", "do", "does",
+    "effect", "effects", "efficacy", "endpoints", "evaluate", "evidence", "fetch", "find",
+    "finding", "findings", "for", "from", "functional", "give", "guideline", "guidelines",
+    "has", "have", "how", "impact", "in", "into", "is", "it", "journal", "journals", "key",
+    "landmark", "latest", "list", "literature", "look", "looking", "management", "medical",
+    "meta", "most", "new", "of", "on", "option", "options", "or", "outcome", "outcomes",
+    "paper", "papers", "patient", "patients", "peer", "plain", "practice", "primary",
+    "published", "query", "question", "randomized", "rates", "rct", "rcts", "recent",
+    "recommendation", "recommendations", "regarding", "related", "report", "reported",
+    "reports", "research", "results", "retrieve", "review", "reviewed", "reviews", "role",
+    "safety", "search", "searching", "should", "show", "shows", "studies", "study",
+    "summarize", "summary", "synthesize", "systematic", "tell", "than", "that", "the",
+    "their", "therapies", "therapy", "this", "to", "topic", "treatment", "trial", "trials",
+    "updated", "use", "used", "using", "versus", "vs", "what", "when", "where", "which",
+    "who", "why", "with", "without",
+}
+
+
+def _extract_biomedical_search_terms(question_text: str) -> List[str]:
+    """
+    Extracts core clinical/biomedical tokens (diseases, drugs, biomarkers, syndromes)
+    from a natural-language medical question so PubMed/EuropePMC/OpenAlex searches succeed.
+    """
+    normalized = re.sub(r"-related\b", "", question_text or "", flags=re.IGNORECASE)
+    normalized = re.sub(r"[^\w\s\-/]", " ", normalized)
+    raw_tokens = normalized.split()
+    kept: List[str] = []
+    seen = set()
+    for tok in raw_tokens:
+        clean_tok = tok.strip("-/")
+        if len(clean_tok) < 2:
+            continue
+        low = clean_tok.lower()
+        if low in _CONVERSATIONAL_STOPWORDS:
+            continue
+        if low not in seen:
+            seen.add(low)
+            kept.append(clean_tok)
+    return kept
 
 
 class DifferentialItem(BaseModel):
@@ -86,7 +133,8 @@ def _generate_pico_queries(parsed_fhir: Dict[str, Any], physician_question: str)
     Agent 2 Step 1: Formulates PICO search queries and ClinicalTrials.gov condition keywords
     from the patient's FHIR phenotype and the physician's research question.
     """
-    cond_text = " ".join(c["display"].lower() for c in parsed_fhir.get("conditions", []))
+    conditions_list = parsed_fhir.get("conditions") or []
+    cond_text = " ".join(c.get("display", "").lower() for c in conditions_list)
     q_low = physician_question.lower()
     queries: List[str] = []
     ct_keyword = "Heart Failure"
@@ -118,12 +166,18 @@ def _generate_pico_queries(parsed_fhir: Dict[str, Any], physician_question: str)
             "KDIGO lupus nephritis clinical practice guideline glucocorticoid taper hydroxychloroquine",
         ])
 
-    primary_cond = parsed_fhir.get("conditions", [{}])[0].get("display", "")
+    primary_cond = conditions_list[0].get("display", "") if conditions_list else ""
     if primary_cond:
         clean_cond = primary_cond.split("(")[0].strip()
         if not queries:
             ct_keyword = clean_cond
         queries.append(f"{clean_cond} randomized controlled trial OR practice guideline")
+
+    if not queries:
+        extracted = _extract_biomedical_search_terms(physician_question)
+        core_str = " ".join(extracted[:5]) or "internal medicine clinical trial"
+        ct_keyword = " ".join(extracted[:4]) or "Clinical Trial"
+        queries.append(f"{core_str} (randomized OR trial OR guideline)")
 
     seen = set()
     unique_queries = []
@@ -137,6 +191,7 @@ def _generate_pico_queries(parsed_fhir: Dict[str, Any], physician_question: str)
 async def run_point_of_care_agent_pipeline(
     fhir_bundle: Dict[str, Any],
     physician_question: str,
+    selected_journals: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Executes the 4-Agent Assistive Clinical Research & Literature Synthesis workflow.
@@ -174,21 +229,25 @@ async def run_point_of_care_agent_pipeline(
         pico_queries,
         max_results_per_query=4,
         condition_keywords=ct_keyword,
+        custom_journals=selected_journals,
     )
     articles = research_results["articles"]
     clinical_trials = research_results.get("clinical_trials", [])
+    covered_journals = research_results.get("covered_journals", get_active_journals())
+    matched_journals = research_results.get("matched_journals", [])
     t2_ms = int((time.time() - t0) * 1000)
 
     journals_hit = sorted(list({a["journal_short"] for a in articles}))
+    journals_summary = ", ".join(journals_hit) if journals_hit else "0 selected journal hits"
     agent_trace.append({
         "agent_id": "agent-2-journal-retriever",
         "agent_name": "Agent 2: Open-Source Research APIs & Journal Retriever",
-        "role": "Queries NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2 filtered to 22 reputed journals.",
+        "role": f"Queries NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2 filtered to {len(covered_journals)} selected journals.",
         "status": "completed",
         "duration_ms": t2_ms,
         "details": (
-            f"Queried 4 open-source APIs (PubMed, Europe PMC, OpenAlex, ClinicalTrials.gov v2). "
-            f"Retrieved {len(articles)} peer-reviewed studies ({', '.join(journals_hit)}) + {len(clinical_trials)} NCT clinical trials."
+            f"Searched {len(covered_journals)} selected journals across 4 open APIs. "
+            f"Retrieved {len(articles)} peer-reviewed studies ({journals_summary}) + {len(clinical_trials)} NCT trials."
         ),
         "queries": pico_queries,
     })
@@ -232,12 +291,366 @@ async def run_point_of_care_agent_pipeline(
 
     return {
         "status": "success",
+        "workflow_mode": "patient",
         "total_duration_ms": total_ms,
         "engine_mode": llm_used,
         "physician_question": physician_question,
         "parsed_fhir": parsed_fhir,
         "agent_trace": agent_trace,
-        "reputed_journals_whitelist": REPUTED_MEDICAL_JOURNALS,
+        "covered_journals": covered_journals,
+        "matched_journals": matched_journals,
+        "reputed_journals_whitelist": covered_journals,
+        "open_source_apis": OPEN_SOURCE_RESEARCH_APIS,
+        "api_status_map": research_results.get("api_status_map", {}),
+        "retrieved_articles": articles,
+        "clinical_trials": clinical_trials,
+        "synthesis": synthesis_data,
+    }
+
+
+def _infer_pub_type_from_plain_query(question_text: str) -> str:
+    """
+    Infers study-design filter ('rct', 'guideline', 'review', or 'all') from a physician's plain query
+    only when a single specific study design is requested.
+    """
+    wants_rct = bool(
+        re.search(r"\b(rct|rcts|randomized|controlled\s+trials?)\b", question_text, flags=re.IGNORECASE)
+    )
+    wants_guideline = bool(
+        re.search(r"\b(guidelines?|consensus|recommendations?)\b", question_text, flags=re.IGNORECASE)
+    )
+    wants_review = bool(
+        re.search(
+            r"\b(systematic\s+reviews?|meta[\-\s]?analys[ie]s)\b",
+            question_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if int(wants_rct) + int(wants_guideline) + int(wants_review) == 1:
+        if wants_rct:
+            return "rct"
+        if wants_guideline:
+            return "guideline"
+        if wants_review:
+            return "review"
+    return "all"
+
+
+def _build_general_question_queries(question_text: str) -> tuple[List[str], str, str, str]:
+    """
+    Formulates high-recall PubMed/EuropePMC/OpenAlex search queries and ClinicalTrials.gov
+    keywords from a physician's plain condition or clinical research query (without FHIR context).
+    """
+    inferred_pub_type = _infer_pub_type_from_plain_query(question_text)
+    tokens = _extract_biomedical_search_terms(question_text)
+    if not tokens:
+        fallback_q = re.sub(r"[^\w\s]", " ", question_text).strip() or "clinical medicine"
+        return [f"({fallback_q}) AND (randomized OR guideline)"], fallback_q[:60], fallback_q[:70], inferred_pub_type
+
+    # Detect comparator pairs like "tenecteplase vs alteplase" or "semaglutide or tirzepatide"
+    comp_match = re.search(
+        r"\b([A-Za-z][A-Za-z0-9\-]{2,})\s+(?:vs\.?|versus|or)\s+([A-Za-z][A-Za-z0-9\-]{2,})\b",
+        question_text,
+        flags=re.IGNORECASE,
+    )
+    queries: List[str] = []
+    if comp_match:
+        arm_a, arm_b = comp_match.group(1), comp_match.group(2)
+        other_tokens = [
+            t for t in tokens if t.lower() not in {arm_a.lower(), arm_b.lower()}
+        ][:4]
+        tail_str = " ".join(other_tokens)
+        if tail_str:
+            queries.append(f"({arm_a} OR {arm_b}) AND ({tail_str})")
+        else:
+            queries.append(f"({arm_a} OR {arm_b})")
+
+    core_five = " ".join(tokens[:5])
+    if core_five:
+        queries.append(core_five)
+
+    anchor_terms = " ".join(tokens[-3:] if len(tokens) > 3 else tokens[:3])
+    if anchor_terms:
+        queries.append(f"({anchor_terms}) AND (randomized OR trial OR guideline OR meta-analysis)")
+
+    deduped: List[str] = []
+    seen = set()
+    for q in queries:
+        if q and q not in seen:
+            seen.add(q)
+            deduped.append(q)
+
+    ct_keywords = " ".join(tokens[:4])
+    topic_summary = " ".join(tokens[:6])
+    return deduped[:2], ct_keywords, topic_summary, inferred_pub_type
+
+
+async def run_general_question_pipeline(
+    physician_question: str,
+    selected_journals: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Executes the 4-Agent Direct Plain Query Literature Retrieval & Synthesis workflow
+    for any medical condition or clinical topic without requiring an HL7 FHIR patient bundle.
+    """
+    pipeline_start = time.time()
+    agent_trace: List[Dict[str, Any]] = []
+    clean_question = physician_question.strip()
+
+    t0 = time.time()
+    queries, ct_keywords, topic_summary, inferred_pub_type = _build_general_question_queries(clean_question)
+    t1_ms = max(int((time.time() - t0) * 1000), 12)
+
+    agent_trace.append({
+        "agent_id": "agent-1-direct-query-builder",
+        "agent_name": "Agent 1: Plain Condition & PICO Query Formulator",
+        "role": "Extracts condition entities, interventions, and search terms from the physician's plain query without FHIR context.",
+        "status": "completed",
+        "duration_ms": t1_ms,
+        "details": (
+            f"Extracted condition/search terms ('{topic_summary}', filter={inferred_pub_type}) "
+            f"& formulated {len(queries)} targeted journal queries."
+        ),
+    })
+
+    t0 = time.time()
+    research_results = await search_pubmed_reputed_journals(
+        queries,
+        max_results_per_query=6,
+        condition_keywords=ct_keywords,
+        pub_type_filter=inferred_pub_type,
+        custom_journals=selected_journals,
+    )
+    articles = research_results["articles"]
+    clinical_trials = research_results.get("clinical_trials", [])
+    covered_journals = research_results.get("covered_journals", get_active_journals())
+    matched_journals = research_results.get("matched_journals", [])
+    t2_ms = int((time.time() - t0) * 1000)
+
+    journals_hit = sorted(list({a["journal_short"] for a in articles}))
+    journals_summary = ", ".join(journals_hit) if journals_hit else "0 selected journal hits"
+    agent_trace.append({
+        "agent_id": "agent-2-journal-retriever",
+        "agent_name": "Agent 2: Open-Source Research APIs & Journal Retriever",
+        "role": f"Queries NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2 across {len(covered_journals)} reputed journals.",
+        "status": "completed",
+        "duration_ms": t2_ms,
+        "details": (
+            f"Searched {len(covered_journals)} reputed journals: retrieved {len(articles)} papers ({journals_summary}) "
+            f"+ {len(clinical_trials)} NCT trials."
+        ),
+        "queries": queries,
+    })
+
+    t0 = time.time()
+    llm_used, synthesis_data = await _invoke_condition_llm_or_engine(
+        condition=topic_summary or clean_question[:80],
+        physician_question=clean_question,
+        articles=articles,
+        clinical_trials=clinical_trials,
+    )
+    t34_ms = int((time.time() - t0) * 1000)
+
+    agent_trace.append({
+        "agent_id": "agent-3-diagnostic-reasoner",
+        "agent_name": "Agent 3: Study Cohorts & Diagnostic Criteria Analyzer",
+        "role": "Extracts published study phenotypes, diagnostic criteria, and clinical classification strata from retrieved papers.",
+        "status": "completed",
+        "duration_ms": int(t34_ms * 0.45),
+        "details": (
+            f"Synthesized {len(synthesis_data.get('differential_diagnoses', []))} study cohort & diagnostic frameworks with inline PMIDs."
+        ),
+    })
+
+    agent_trace.append({
+        "agent_id": "agent-4-treatment-synthesizer",
+        "agent_name": "Agent 4: Comparative Trial & Guideline Evidence Synthesizer",
+        "role": "Compiles non-prescriptive comparative trial outcomes (HR, OR, ARR) and study safety protocols for physician review.",
+        "status": "completed",
+        "duration_ms": int(t34_ms * 0.55),
+        "details": (
+            f"Compiled {len(synthesis_data.get('treatment_plan', []))} therapeutic trial comparisons and "
+            f"{len(synthesis_data.get('contraindications_and_warnings', []))} trial exclusion/safety notes ({llm_used})."
+        ),
+    })
+
+    total_ms = int((time.time() - pipeline_start) * 1000)
+
+    return {
+        "status": "success",
+        "workflow_mode": "general",
+        "total_duration_ms": total_ms,
+        "engine_mode": llm_used,
+        "physician_question": clean_question,
+        "parsed_fhir": None,
+        "agent_trace": agent_trace,
+        "covered_journals": covered_journals,
+        "matched_journals": matched_journals,
+        "reputed_journals_whitelist": covered_journals,
+        "open_source_apis": OPEN_SOURCE_RESEARCH_APIS,
+        "api_status_map": research_results.get("api_status_map", {}),
+        "retrieved_articles": articles,
+        "clinical_trials": clinical_trials,
+        "synthesis": synthesis_data,
+    }
+
+
+async def run_condition_research_pipeline(
+    condition: str,
+    physician_question: str = "",
+    pub_type_filter: str = "all",
+    selected_journals: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Executes the 4-Agent Condition-Based Research Paper Retrieval & Literature Synthesis workflow
+    without requiring an HL7 FHIR patient bundle.
+    """
+    pipeline_start = time.time()
+    agent_trace: List[Dict[str, Any]] = []
+    clean_condition = condition.strip()
+    clean_question = physician_question.strip()
+
+    effective_question = (
+        clean_question
+        if clean_question
+        else (
+            f"Synthesize key peer-reviewed clinical trials, practice guidelines, diagnostic criteria, "
+            f"and comparative therapeutic outcomes reported in medical literature for {clean_condition}."
+        )
+    )
+
+    # =========================================================================
+    # AGENT 1: Condition & PICO Literature Query Formulator
+    # =========================================================================
+    t0 = time.time()
+    extracted_cond_terms = " ".join(_extract_biomedical_search_terms(clean_condition)[:5]) or clean_condition
+    pub_norm = (pub_type_filter or "all").lower().strip()
+    raw_queries: List[str] = []
+    if clean_question:
+        q_terms, _, _ = _build_general_question_queries(f"{clean_condition} {clean_question}")
+        raw_queries.extend(q_terms)
+
+    if pub_norm == "rct":
+        raw_queries.append(f"{extracted_cond_terms}")
+        raw_queries.append(f"({extracted_cond_terms}) AND (randomized OR clinical trial)")
+    elif pub_norm == "guideline":
+        raw_queries.append(f"{extracted_cond_terms}")
+        raw_queries.append(f"({extracted_cond_terms}) AND (guideline OR consensus)")
+    elif pub_norm == "review":
+        raw_queries.append(f"{extracted_cond_terms}")
+        raw_queries.append(f"({extracted_cond_terms}) AND (meta-analysis OR systematic review)")
+    else:
+        raw_queries.append(f"({extracted_cond_terms}) AND (randomized controlled trial OR clinical trial)")
+        raw_queries.append(f"({extracted_cond_terms}) AND (practice guideline OR systematic review OR meta-analysis)")
+
+    queries: List[str] = []
+    seen_q = set()
+    for q_item in raw_queries:
+        if q_item not in seen_q:
+            seen_q.add(q_item)
+            queries.append(q_item)
+    queries = queries[:2]
+    t1_ms = max(int((time.time() - t0) * 1000), 12)
+
+    filter_label_map = {
+        "all": "All Study Designs (RCTs, Guidelines & Meta-Analyses)",
+        "rct": "Randomized Controlled Trials (RCTs)",
+        "guideline": "Clinical Practice Guidelines",
+        "review": "Systematic Reviews & Meta-Analyses",
+    }
+    filter_desc = filter_label_map.get((pub_type_filter or "all").lower(), "All Study Designs")
+
+    agent_trace.append({
+        "agent_id": "agent-1-condition-query-builder",
+        "agent_name": "Agent 1: Condition & PICO Query Formulator",
+        "role": "Constructs targeted MeSH/keyword queries and study-design filters from the physician's condition topic.",
+        "status": "completed",
+        "duration_ms": t1_ms,
+        "details": f"Condition: '{clean_condition}' • Filter: {filter_desc} • Generated {len(queries)} journal search queries.",
+    })
+
+    # =========================================================================
+    # AGENT 2: Multi-API Open-Source Biomedical Research Retriever
+    # =========================================================================
+    t0 = time.time()
+    research_results = await search_pubmed_reputed_journals(
+        queries,
+        max_results_per_query=6,
+        condition_keywords=extracted_cond_terms,
+        pub_type_filter=pub_type_filter,
+        custom_journals=selected_journals,
+    )
+    articles = research_results["articles"]
+    clinical_trials = research_results.get("clinical_trials", [])
+    covered_journals = research_results.get("covered_journals", get_active_journals())
+    matched_journals = research_results.get("matched_journals", [])
+    t2_ms = int((time.time() - t0) * 1000)
+
+    journals_hit = sorted(list({a["journal_short"] for a in articles}))
+    journals_summary = ", ".join(journals_hit) if journals_hit else "0 selected journal hits"
+    agent_trace.append({
+        "agent_id": "agent-2-journal-retriever",
+        "agent_name": "Agent 2: Open-Source Research APIs & Journal Retriever",
+        "role": f"Queries NCBI PubMed E-Utilities, Europe PMC, OpenAlex, and ClinicalTrials.gov v2 filtered to {len(covered_journals)} selected journals.",
+        "status": "completed",
+        "duration_ms": t2_ms,
+        "details": (
+            f"Searched {len(covered_journals)} selected journals: retrieved {len(articles)} papers ({journals_summary}) "
+            f"+ {len(clinical_trials)} NCT trials."
+        ),
+        "queries": queries,
+    })
+
+    # =========================================================================
+    # AGENT 3 & AGENT 4: Condition Literature & Trial Evidence Synthesis
+    # =========================================================================
+    t0 = time.time()
+    llm_used, synthesis_data = await _invoke_condition_llm_or_engine(
+        condition=clean_condition,
+        physician_question=effective_question,
+        articles=articles,
+        clinical_trials=clinical_trials,
+    )
+    t34_ms = int((time.time() - t0) * 1000)
+
+    agent_trace.append({
+        "agent_id": "agent-3-diagnostic-reasoner",
+        "agent_name": "Agent 3: Condition Subtypes & Diagnostic Criteria Analyzer",
+        "role": "Extracts disease phenotypes, differential considerations, and diagnostic criteria from retrieved papers.",
+        "status": "completed",
+        "duration_ms": int(t34_ms * 0.45),
+        "details": (
+            f"Synthesized {len(synthesis_data.get('differential_diagnoses', []))} phenotype/diagnostic frameworks with inline PMIDs."
+        ),
+    })
+
+    agent_trace.append({
+        "agent_id": "agent-4-treatment-synthesizer",
+        "agent_name": "Agent 4: Landmark Trial & Guideline Evidence Synthesizer",
+        "role": "Compiles non-prescriptive comparative trial outcomes (HR, OR, ARR) and study protocols for physician review.",
+        "status": "completed",
+        "duration_ms": int(t34_ms * 0.55),
+        "details": (
+            f"Compiled {len(synthesis_data.get('treatment_plan', []))} therapeutic trial comparisons and "
+            f"{len(synthesis_data.get('contraindications_and_warnings', []))} trial exclusion/safety notes ({llm_used})."
+        ),
+    })
+
+    total_ms = int((time.time() - pipeline_start) * 1000)
+
+    return {
+        "status": "success",
+        "workflow_mode": "condition",
+        "condition": clean_condition,
+        "pub_type_filter": pub_type_filter,
+        "total_duration_ms": total_ms,
+        "engine_mode": llm_used,
+        "physician_question": effective_question,
+        "parsed_fhir": None,
+        "agent_trace": agent_trace,
+        "covered_journals": covered_journals,
+        "matched_journals": matched_journals,
+        "reputed_journals_whitelist": covered_journals,
         "open_source_apis": OPEN_SOURCE_RESEARCH_APIS,
         "api_status_map": research_results.get("api_status_map", {}),
         "retrieved_articles": articles,
@@ -551,60 +964,239 @@ def _build_curated_clinical_synthesis(
         }
 
     # Case 4: Lupus Nephritis (Assistive Research Framing)
+    if "lupus" in cond_text or "sle" in cond_text:
+        return {
+            "point_of_care_answer": (
+                "Landmark Phase 3 randomized controlled trials in *The New England Journal of Medicine* (**BLISS-LN**) [PMID: 32937045] and "
+                "*The Lancet* (**AURORA 1**) [PMID: 33971155], synthesized in the **KDIGO 2024 Lupus Nephritis Clinical Practice Guideline** "
+                "(*Kidney International*) [PMID: 38182286], provide comparative efficacy and safety data for active Class IV Lupus Nephritis:\n\n"
+                "1. **Belimumab + Standard Therapy (BLISS-LN, *NEJM* 2020):** "
+                "Among 448 patients with active Class III, IV, or V lupus nephritis, adding IV belimumab to mycophenolate mofetil (MMF) or "
+                "cyclophosphamide-azathioprine significantly increased Week 104 Primary Efficacy Renal Response (43% vs 32%; OR 1.6; P=0.03), "
+                "Complete Renal Response (30% vs 20%; P=0.02), and reduced the risk of a renal-related event or death by 49% (HR 0.51) [PMID: 32937045].\n\n"
+                "2. **Voclosporin + MMF + Low-Dose Steroids (AURORA 1, *The Lancet* 2021):** "
+                "In patients with active lupus nephritis and baseline **eGFR >45 mL/min/1.73m²**, adding the calcineurin inhibitor voclosporin (23.7 mg BID) "
+                "to MMF (2 g/day) and a rapid low-dose corticosteroid taper achieved Complete Renal Response at Week 52 in **41% vs 23%** of patients "
+                "(OR 2.65; 95% CI 1.64–4.27; P<0.0001), with rapid UPCR reduction [PMID: 33971155].\n\n"
+                "3. **Reduced-Dose Glucocorticoid Regimens (KDIGO 2024):** "
+                "KDIGO 2024 evidence tables highlight that after initial IV methylprednisolone pulses (0.25–0.5 g/day x 1–3 days), reduced-dose oral "
+                "prednisone tapering (starting at <=0.5 mg/kg/day and tapering to <=5 mg/day by 4–6 months) achieved comparable renal response rates "
+                "with lower serious infection rates compared with historical high-dose steroid regimens [PMID: 38182286]."
+            ),
+            "key_clinical_takeaways": [
+                "AURORA 1 (The Lancet) reported a 41% vs 23% Week-52 complete renal remission rate (OR 2.65, P<0.0001) with voclosporin + MMF in cohorts with eGFR >45 mL/min/1.73m² [PMID: 33971155].",
+                "BLISS-LN (NEJM) demonstrated a 49% reduction in renal-related events or death (HR 0.51) and higher 2-year complete renal response (30% vs 20%) with belimumab + standard therapy [PMID: 32937045].",
+                "KDIGO 2024 Guidelines present 4 parallel Level 1 induction options for active Class III/IV LN alongside reduced-dose glucocorticoid tapering and universal hydroxychloroquine [PMID: 38182286]."
+            ],
+            "primary_diagnosis_summary": "Research Cohort Alignment: Biopsy-Proven ISN/RPS Class IV Diffuse Proliferative Lupus Nephritis (Activity Index 11/24, UPCR 3.6 g/g, eGFR 68 mL/min/1.73m²).",
+            "differential_diagnoses": [
+                {
+                    "diagnosis": "Active Proliferative Lupus Nephritis Class IV Cohort (BLISS-LN / AURORA 1 Eligibility Profile)",
+                    "likelihood": "Primary Cohort Match",
+                    "fhir_evidence": "Biopsy Class IV, UPCR 3.6 g/g, anti-dsDNA 340 IU/mL, C3 42 mg/dL, eGFR 68 mL/min/1.73m² (>45 cutoff for AURORA 1).",
+                    "diagnostic_workup": "KDIGO 2024 describes baseline viral hepatitis/TB screening, antiphospholipid antibody profiling, and electron microscopy assessment of podocyte foot processes.",
+                    "supporting_pmids": ["38182286", "32937045", "33971155"]
+                }
+            ],
+            "treatment_plan": [
+                {
+                    "category": "Calcineurin Inhibitor + MPAA Trial Evidence (AURORA 1)",
+                    "intervention": "Voclosporin 23.7 mg BID + MMF 2 g/day + Rapid Low-Dose Steroid Taper",
+                    "rationale": "Studied in patients with baseline eGFR >45 mL/min/1.73m² and heavy proteinuria; demonstrated rapid UPCR reduction and 41% vs 23% complete renal response at 52 weeks.",
+                    "evidence_grade": "Level A RCT (The Lancet) / KDIGO 1B",
+                    "supporting_pmids": ["33971155", "38182286"]
+                },
+                {
+                    "category": "Anti-BAFF Biologic + Standard Therapy Evidence (BLISS-LN)",
+                    "intervention": "Belimumab + MMF or Low-Dose Cyclophosphamide (Euro-Lupus)",
+                    "rationale": "Demonstrated superior 104-week renal response, serologic normalization (anti-dsDNA/C3), and prevention of renal flares and eGFR decline.",
+                    "evidence_grade": "Level A RCT (NEJM) / KDIGO 1B",
+                    "supporting_pmids": ["32937045", "38182286"]
+                }
+            ],
+            "contraindications_and_warnings": [
+                "AURORA 1 Subgroup & Hemodynamic Note: Voclosporin trials excluded baseline eGFR <=45 mL/min/1.73m² and included protocol-mandated dose modifications if eGFR decreased >20–30% [PMID: 33971155].",
+                "KDIGO 2024 Reproductive Pharmacology Note: Mycophenolic acid and RAAS blockers are documented teratogens requiring pre-exposure exclusion of pregnancy [PMID: 38182286]."
+            ],
+            "monitoring_and_follow_up": [
+                "KDIGO 2024 efficacy benchmarks evaluate >=25% UPCR reduction by Month 3, >=50% reduction by Month 6, and UPCR <0.5–0.7 g/g by Month 12 [PMID: 38182286]."
+            ]
+        }
+
+    primary_cond_label = (
+        ", ".join(c["display"] for c in parsed_fhir.get("conditions", [])[:2])
+        or "Custom FHIR R4 Patient Phenotype"
+    )
+    return _build_dynamic_literature_fallback(
+        subject_label=primary_cond_label,
+        articles=articles,
+        clinical_trials=[],
+    )
+
+
+async def _invoke_condition_llm_or_engine(
+    condition: str,
+    physician_question: str,
+    articles: List[Dict[str, Any]],
+    clinical_trials: List[Dict[str, Any]],
+) -> tuple[str, Dict[str, Any]]:
+    """
+    Synthesizes assistive condition-level peer-reviewed literature findings using
+    Gemini Flash 3.8 (`gemini-3.8-flash`) with strict non-prescriptive guardrails.
+    """
+    literature_context = "\n\n".join(
+        f"[PMID: {a['pmid']}] {a['title']} — {a['journal']} ({a['year']}) | {a['pub_type']} | {a['evidence_level']}\n"
+        f"Authors: {a['authors']} | DOI: {a.get('doi', 'N/A')}\n"
+        f"Summary: {a['abstract_summary']}"
+        for a in articles
+    ) or "No whitelisted journal articles matched this exact query."
+
+    trials_context = "\n".join(
+        f"[{t['nct_id']}] {t['title']} ({t['phase']} • {t['status']}) | Interventions: {t['interventions']}"
+        for t in clinical_trials
+    ) or "No active NCT clinical trials returned."
+
+    system_instruction = (
+        "You are an Assistive Clinical Research & Literature Synthesis Copilot for attending physicians. "
+        "CRITICAL ROLE BOUNDARY: You must NEVER prescribe, command, or issue medical directives. "
+        "Clinical judgment belongs exclusively to the physician.\n"
+        "The physician is querying peer-reviewed medical literature for a clinical condition (without a specific patient chart). "
+        "Synthesize what the retrieved high-impact medical journal papers and registered clinical trials report on "
+        "pathophysiology/phenotypes, diagnostic & classification criteria, comparative therapeutic trial outcomes "
+        "(hazard ratios, odds ratios, confidence intervals, p-values), key trial exclusion criteria, and study endpoints. "
+        "In `differential_diagnoses`, map `fhir_evidence` to 'Published Study Cohort & Phenotype Characteristics'. "
+        "Always cite specific retrieved PMIDs inline as [PMID: XXXXXXXX]."
+    )
+
+    user_prompt = (
+        f"=== CLINICAL CONDITION / RESEARCH TOPIC ===\n"
+        f"{condition}\n\n"
+        f"=== PHYSICIAN RESEARCH FOCUS ===\n"
+        f"{physician_question}\n\n"
+        f"=== RETRIEVED PEER-REVIEWED LITERATURE (22 WHITELISTED JOURNALS) ===\n"
+        f"{literature_context}\n\n"
+        f"=== REGISTERED CLINICAL TRIALS (CLINICALTRIALS.GOV API v2) ===\n"
+        f"{trials_context}\n\n"
+        f"Provide an objective, non-prescriptive synthesis of the retrieved peer-reviewed literature and clinical trials for '{condition}'."
+    )
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "my-project-ssi-364811")
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+        model_id = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            mode_label = f"Gemini Flash 3.8 ({model_id} • Condition Copilot)"
+        else:
+            client = genai.Client(vertexai=True, project=project_id, location=location)
+            mode_label = f"Gemini Flash 3.8 ({model_id} • Vertex AI Global)"
+
+        response = client.models.generate_content(
+            model=model_id,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=ClinicalSynthesisOutput,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                temperature=0.1,
+            ),
+        )
+        if response and response.text:
+            parsed_json = json.loads(response.text)
+            return mode_label, parsed_json
+    except Exception:
+        pass
+
+    return "Assistive Literature Synthesis Engine (Direct Journal Index)", _build_dynamic_literature_fallback(
+        subject_label=condition,
+        articles=articles,
+        clinical_trials=clinical_trials,
+    )
+
+
+def _build_dynamic_literature_fallback(
+    subject_label: str,
+    articles: List[Dict[str, Any]],
+    clinical_trials: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Builds a citation-grounded assistive literature summary directly from live retrieved
+    peer-reviewed journal articles and ClinicalTrials.gov studies when offline from LLM endpoints.
+    """
+    if not articles:
+        trials_note = (
+            f"ClinicalTrials.gov v2 returned {len(clinical_trials)} registered interventional studies ({', '.join(t['nct_id'] for t in clinical_trials[:3])})."
+            if clinical_trials
+            else "Consider broadening the condition terminology or adjusting the study-design filter."
+        )
+        return {
+            "point_of_care_answer": (
+                f"No peer-reviewed articles in the strict 22-journal whitelist matched the exact query for **{subject_label}**. {trials_note}"
+            ),
+            "key_clinical_takeaways": [
+                f"Search restricted strictly to 22 flagship peer-reviewed journals (NEJM, The Lancet, JAMA, BMJ, Circulation, etc.).",
+                trials_note,
+            ],
+            "primary_diagnosis_summary": f"Condition Literature Query: {subject_label}",
+            "differential_diagnoses": [],
+            "treatment_plan": [],
+            "contraindications_and_warnings": [
+                "Broaden MeSH or disease terminology if searching for ultra-rare subspecialty syndromes."
+            ],
+            "monitoring_and_follow_up": [
+                "Inspect registered NCT protocols in the right-hand panel when active trials are available."
+            ],
+        }
+
+    top_articles = articles[:4]
+    paragraphs = [
+        f"Peer-reviewed literature retrieved across flagship journals for **{subject_label}** highlights the following published findings:"
+    ]
+    takeaways = []
+    tx_items = []
+    for idx, art in enumerate(top_articles, start=1):
+        pmid = art["pmid"]
+        paragraphs.append(
+            f"{idx}. **{art['title']}** (*{art['journal_short']}*, {art['year']}): "
+            f"{art['abstract_summary']} [PMID: {pmid}]"
+        )
+        takeaways.append(
+            f"{art['journal_short']} ({art['year']}) — {art['title']} [PMID: {pmid}]."
+        )
+        tx_items.append({
+            "category": f"{art['journal_short']} ({art['year']}) • {art['pub_type']}",
+            "intervention": art["title"],
+            "rationale": f"{art['abstract_summary']} [PMID: {pmid}]",
+            "evidence_grade": art.get("evidence_level", "Peer-Reviewed Study"),
+            "supporting_pmids": [pmid],
+        })
+
+    pmids_all = [a["pmid"] for a in top_articles[:3]]
     return {
-        "point_of_care_answer": (
-            "Landmark Phase 3 randomized controlled trials in *The New England Journal of Medicine* (**BLISS-LN**) [PMID: 32937045] and "
-            "*The Lancet* (**AURORA 1**) [PMID: 33971155], synthesized in the **KDIGO 2024 Lupus Nephritis Clinical Practice Guideline** "
-            "(*Kidney International*) [PMID: 38182286], provide comparative efficacy and safety data for active Class IV Lupus Nephritis:\n\n"
-            "1. **Belimumab + Standard Therapy (BLISS-LN, *NEJM* 2020):** "
-            "Among 448 patients with active Class III, IV, or V lupus nephritis, adding IV belimumab to mycophenolate mofetil (MMF) or "
-            "cyclophosphamide-azathioprine significantly increased Week 104 Primary Efficacy Renal Response (43% vs 32%; OR 1.6; P=0.03), "
-            "Complete Renal Response (30% vs 20%; P=0.02), and reduced the risk of a renal-related event or death by 49% (HR 0.51) [PMID: 32937045].\n\n"
-            "2. **Voclosporin + MMF + Low-Dose Steroids (AURORA 1, *The Lancet* 2021):** "
-            "In patients with active lupus nephritis and baseline **eGFR >45 mL/min/1.73m²**, adding the calcineurin inhibitor voclosporin (23.7 mg BID) "
-            "to MMF (2 g/day) and a rapid low-dose corticosteroid taper achieved Complete Renal Response at Week 52 in **41% vs 23%** of patients "
-            "(OR 2.65; 95% CI 1.64–4.27; P<0.0001), with rapid UPCR reduction [PMID: 33971155].\n\n"
-            "3. **Reduced-Dose Glucocorticoid Regimens (KDIGO 2024):** "
-            "KDIGO 2024 evidence tables highlight that after initial IV methylprednisolone pulses (0.25–0.5 g/day x 1–3 days), reduced-dose oral "
-            "prednisone tapering (starting at <=0.5 mg/kg/day and tapering to <=5 mg/day by 4–6 months) achieved comparable renal response rates "
-            "with lower serious infection rates compared with historical high-dose steroid regimens [PMID: 38182286]."
-        ),
-        "key_clinical_takeaways": [
-            "AURORA 1 (The Lancet) reported a 41% vs 23% Week-52 complete renal remission rate (OR 2.65, P<0.0001) with voclosporin + MMF in cohorts with eGFR >45 mL/min/1.73m² [PMID: 33971155].",
-            "BLISS-LN (NEJM) demonstrated a 49% reduction in renal-related events or death (HR 0.51) and higher 2-year complete renal response (30% vs 20%) with belimumab + standard therapy [PMID: 32937045].",
-            "KDIGO 2024 Guidelines present 4 parallel Level 1 induction options for active Class III/IV LN alongside reduced-dose glucocorticoid tapering and universal hydroxychloroquine [PMID: 38182286]."
-        ],
-        "primary_diagnosis_summary": "Research Cohort Alignment: Biopsy-Proven ISN/RPS Class IV Diffuse Proliferative Lupus Nephritis (Activity Index 11/24, UPCR 3.6 g/g, eGFR 68 mL/min/1.73m²).",
+        "point_of_care_answer": "\n\n".join(paragraphs),
+        "key_clinical_takeaways": takeaways[:4],
+        "primary_diagnosis_summary": f"Condition Literature Scope: {subject_label} ({len(articles)} Whitelisted Journal Papers Retrieved)",
         "differential_diagnoses": [
             {
-                "diagnosis": "Active Proliferative Lupus Nephritis Class IV Cohort (BLISS-LN / AURORA 1 Eligibility Profile)",
-                "likelihood": "Primary Cohort Match",
-                "fhir_evidence": "Biopsy Class IV, UPCR 3.6 g/g, anti-dsDNA 340 IU/mL, C3 42 mg/dL, eGFR 68 mL/min/1.73m² (>45 cutoff for AURORA 1).",
-                "diagnostic_workup": "KDIGO 2024 describes baseline viral hepatitis/TB screening, antiphospholipid antibody profiling, and electron microscopy assessment of podocyte foot processes.",
-                "supporting_pmids": ["38182286", "32937045", "33971155"]
+                "diagnosis": f"{subject_label} — Published Study Cohorts & Diagnostic Definitions",
+                "likelihood": "Peer-Reviewed Literature Scope",
+                "fhir_evidence": "Evaluated across published inclusion criteria, disease staging, and biomarker strata in retrieved studies.",
+                "diagnostic_workup": "Refer to linked society guidelines and trial eligibility protocols for standardized diagnostic workup criteria.",
+                "supporting_pmids": pmids_all,
             }
         ],
-        "treatment_plan": [
-            {
-                "category": "Calcineurin Inhibitor + MPAA Trial Evidence (AURORA 1)",
-                "intervention": "Voclosporin 23.7 mg BID + MMF 2 g/day + Rapid Low-Dose Steroid Taper",
-                "rationale": "Studied in patients with baseline eGFR >45 mL/min/1.73m² and heavy proteinuria; demonstrated rapid UPCR reduction and 41% vs 23% complete renal response at 52 weeks.",
-                "evidence_grade": "Level A RCT (The Lancet) / KDIGO 1B",
-                "supporting_pmids": ["33971155", "38182286"]
-            },
-            {
-                "category": "Anti-BAFF Biologic + Standard Therapy Evidence (BLISS-LN)",
-                "intervention": "Belimumab + MMF or Low-Dose Cyclophosphamide (Euro-Lupus)",
-                "rationale": "Demonstrated superior 104-week renal response, serologic normalization (anti-dsDNA/C3), and prevention of renal flares and eGFR decline.",
-                "evidence_grade": "Level A RCT (NEJM) / KDIGO 1B",
-                "supporting_pmids": ["32937045", "38182286"]
-            }
-        ],
+        "treatment_plan": tx_items,
         "contraindications_and_warnings": [
-            "AURORA 1 Subgroup & Hemodynamic Note: Voclosporin trials excluded baseline eGFR <=45 mL/min/1.73m² and included protocol-mandated dose modifications if eGFR decreased >20–30% [PMID: 33971155].",
-            "KDIGO 2024 Reproductive Pharmacology Note: Mycophenolic acid and RAAS blockers are documented teratogens requiring pre-exposure exclusion of pregnancy [PMID: 38182286]."
+            f"Review individual trial exclusion criteria, renal/hepatic dosing strata, and adverse event tables in cited sources ({', '.join('PMID: ' + p for p in pmids_all)})."
         ],
         "monitoring_and_follow_up": [
-            "KDIGO 2024 efficacy benchmarks evaluate >=25% UPCR reduction by Month 3, >=50% reduction by Month 6, and UPCR <0.5–0.7 g/g by Month 12 [PMID: 38182286]."
-        ]
+            "Published trial protocols track primary clinical composite endpoints, biomarker kinetics, and longitudinal safety assessments."
+        ],
     }
+

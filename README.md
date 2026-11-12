@@ -4,9 +4,17 @@ A physician-led, non-prescriptive **Assistive Clinical Research & Literature Syn
 
 ---
 
+## Inquiry Modes & Customizable Journal Whitelist
+Inside the Point-of-Care Workstation, physicians can switch between two **Radio Button** query modes:
+1. **With FHIR Context (`POST /api/synthesize`):** Select an HL7 FHIR R4 patient cohort (or import/fetch an external FHIR R4 Bundle/URL). `MedEvidenceAI` automatically generates a patient-specific clinical literature query from the patient's demographics, SNOMED/ICD-10 conditions, abnormal LOINC labs/vitals, medications, and allergies, then synthesizes matching trial outcomes.
+2. **Direct Query Without FHIR Context (`POST /api/general-question` / `POST /api/condition-research`):** Enter any **plain query** on a medical condition or clinical topic (e.g., *Acute ischemic stroke*, *research articles on HFpEF*, or *guidelines for infective endocarditis*) to independently retrieve and synthesize peer-reviewed research articles and registered ClinicalTrials.gov (`NCT...`) trials without FHIR context.
+3. **Customizable Reputed Journals (`GET/POST/DELETE /api/journals`):** View, add, remove, or reset the active peer-reviewed medical journals from the header Journals modal anytime.
+
+---
+
 ## Core Governance & Assistive Role
 * **Physician-in-the-Loop Authority:** Does **not** issue medical orders, prescriptions, or autonomous directives.
-* **Evidence & Cohort Synthesis:** Presents published hazard ratios, confidence intervals, inclusion/exclusion criteria, pharmacokinetic parameters, and diagnostic evaluation frameworks from peer-reviewed literature matching the patient's FHIR profile.
+* **Evidence & Cohort Synthesis:** Presents published hazard ratios, confidence intervals, inclusion/exclusion criteria, pharmacokinetic parameters, and diagnostic evaluation frameworks from peer-reviewed literature.
 
 ---
 

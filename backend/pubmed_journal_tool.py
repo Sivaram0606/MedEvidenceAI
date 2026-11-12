@@ -6,39 +6,185 @@ European Heart Journal, AJRCCM, Intensive Care Medicine, Kidney International, e
 via live NCBI PubMed Entrez E-Utilities API (`esearch` + `efetch`) plus verified landmark trial index.
 """
 
+import re
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 import httpx
 
-# Strict Whitelist of Reputed High-Impact Medical Journals
-REPUTED_MEDICAL_JOURNALS: List[Dict[str, str]] = [
-    {"name": "The New England Journal of Medicine", "abbrev": "N Engl J Med", "short": "NEJM", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
-    {"name": "The Lancet", "abbrev": "Lancet", "short": "The Lancet", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
-    {"name": "JAMA", "abbrev": "JAMA", "short": "JAMA", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
-    {"name": "The BMJ", "abbrev": "BMJ", "short": "BMJ", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
-    {"name": "Annals of Internal Medicine", "abbrev": "Ann Intern Med", "short": "Ann Intern Med", "category": "Internal Medicine", "impact_tier": "Tier 1 (Flagship)"},
-    {"name": "JAMA Internal Medicine", "abbrev": "JAMA Intern Med", "short": "JAMA Intern Med", "category": "Internal Medicine", "impact_tier": "Tier 1"},
-    {"name": "Nature Medicine", "abbrev": "Nat Med", "short": "Nature Medicine", "category": "Translational Medicine", "impact_tier": "Tier 1"},
-    {"name": "Circulation", "abbrev": "Circulation", "short": "Circulation (AHA)", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Journal of the American College of Cardiology", "abbrev": "J Am Coll Cardiol", "short": "JACC", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "European Heart Journal", "abbrev": "Eur Heart J", "short": "Eur Heart J (ESC)", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "JAMA Cardiology", "abbrev": "JAMA Cardiol", "short": "JAMA Cardiol", "category": "Cardiology", "impact_tier": "Tier 1"},
-    {"name": "American Journal of Respiratory and Critical Care Medicine", "abbrev": "Am J Respir Crit Care Med", "short": "AJRCCM (ATS)", "category": "Pulmonology / Critical Care", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Intensive Care Medicine", "abbrev": "Intensive Care Med", "short": "Intensive Care Med", "category": "Critical Care", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "The Lancet Respiratory Medicine", "abbrev": "Lancet Respir Med", "short": "Lancet Respir Med", "category": "Pulmonology", "impact_tier": "Tier 1"},
-    {"name": "The Lancet Infectious Diseases", "abbrev": "Lancet Infect Dis", "short": "Lancet Infect Dis", "category": "Infectious Disease", "impact_tier": "Tier 1"},
-    {"name": "Clinical Infectious Diseases", "abbrev": "Clin Infect Dis", "short": "Clin Infect Dis (IDSA)", "category": "Infectious Disease", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Chest", "abbrev": "Chest", "short": "CHEST", "category": "Pulmonology / Critical Care", "impact_tier": "Tier 1"},
-    {"name": "Kidney International", "abbrev": "Kidney Int", "short": "Kidney Int (KDIGO/ISN)", "category": "Nephrology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Journal of the American Society of Nephrology", "abbrev": "J Am Soc Nephrol", "short": "JASN", "category": "Nephrology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Annals of the Rheumatic Diseases", "abbrev": "Ann Rheum Dis", "short": "Ann Rheum Dis (EULAR)", "category": "Rheumatology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Gastroenterology", "abbrev": "Gastroenterology", "short": "Gastroenterology (AGA)", "category": "Gastroenterology", "impact_tier": "Tier 1 (Society Flagship)"},
-    {"name": "Gut", "abbrev": "Gut", "short": "Gut (BSG)", "category": "Gastroenterology", "impact_tier": "Tier 1"},
+# Default Curated Whitelist of 22 Reputed High-Impact Medical Journals
+DEFAULT_MEDICAL_JOURNALS: List[Dict[str, str]] = [
+    {"id": "nejm", "name": "The New England Journal of Medicine", "abbrev": "N Engl J Med", "short": "NEJM", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
+    {"id": "lancet", "name": "The Lancet", "abbrev": "Lancet", "short": "The Lancet", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
+    {"id": "jama", "name": "JAMA", "abbrev": "JAMA", "short": "JAMA", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
+    {"id": "bmj", "name": "The BMJ", "abbrev": "BMJ", "short": "BMJ", "category": "General Medicine", "impact_tier": "Tier 1 (Flagship)"},
+    {"id": "ann-intern-med", "name": "Annals of Internal Medicine", "abbrev": "Ann Intern Med", "short": "Ann Intern Med", "category": "Internal Medicine", "impact_tier": "Tier 1 (Flagship)"},
+    {"id": "jama-intern-med", "name": "JAMA Internal Medicine", "abbrev": "JAMA Intern Med", "short": "JAMA Intern Med", "category": "Internal Medicine", "impact_tier": "Tier 1"},
+    {"id": "nat-med", "name": "Nature Medicine", "abbrev": "Nat Med", "short": "Nature Medicine", "category": "Translational Medicine", "impact_tier": "Tier 1"},
+    {"id": "circulation", "name": "Circulation", "abbrev": "Circulation", "short": "Circulation (AHA)", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "jacc", "name": "Journal of the American College of Cardiology", "abbrev": "J Am Coll Cardiol", "short": "JACC", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "eur-heart-j", "name": "European Heart Journal", "abbrev": "Eur Heart J", "short": "Eur Heart J (ESC)", "category": "Cardiology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "jama-cardiol", "name": "JAMA Cardiology", "abbrev": "JAMA Cardiol", "short": "JAMA Cardiol", "category": "Cardiology", "impact_tier": "Tier 1"},
+    {"id": "ajrccm", "name": "American Journal of Respiratory and Critical Care Medicine", "abbrev": "Am J Respir Crit Care Med", "short": "AJRCCM (ATS)", "category": "Pulmonology / Critical Care", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "intensive-care-med", "name": "Intensive Care Medicine", "abbrev": "Intensive Care Med", "short": "Intensive Care Med", "category": "Critical Care", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "lancet-respir-med", "name": "The Lancet Respiratory Medicine", "abbrev": "Lancet Respir Med", "short": "Lancet Respir Med", "category": "Pulmonology", "impact_tier": "Tier 1"},
+    {"id": "lancet-infect-dis", "name": "The Lancet Infectious Diseases", "abbrev": "Lancet Infect Dis", "short": "Lancet Infect Dis", "category": "Infectious Disease", "impact_tier": "Tier 1"},
+    {"id": "clin-infect-dis", "name": "Clinical Infectious Diseases", "abbrev": "Clin Infect Dis", "short": "Clin Infect Dis (IDSA)", "category": "Infectious Disease", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "chest", "name": "Chest", "abbrev": "Chest", "short": "CHEST", "category": "Pulmonology / Critical Care", "impact_tier": "Tier 1"},
+    {"id": "kidney-int", "name": "Kidney International", "abbrev": "Kidney Int", "short": "Kidney Int (KDIGO/ISN)", "category": "Nephrology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "jasn", "name": "Journal of the American Society of Nephrology", "abbrev": "J Am Soc Nephrol", "short": "JASN", "category": "Nephrology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "ann-rheum-dis", "name": "Annals of the Rheumatic Diseases", "abbrev": "Ann Rheum Dis", "short": "Ann Rheum Dis (EULAR)", "category": "Rheumatology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "gastroenterology", "name": "Gastroenterology", "abbrev": "Gastroenterology", "short": "Gastroenterology (AGA)", "category": "Gastroenterology", "impact_tier": "Tier 1 (Society Flagship)"},
+    {"id": "gut", "name": "Gut", "abbrev": "Gut", "short": "Gut (BSG)", "category": "Gastroenterology", "impact_tier": "Tier 1"},
 ]
 
-PUBMED_JOURNAL_FILTER_CLAUSE = "(" + " OR ".join(
-    f'"{j["abbrev"]}"[Journal]' for j in REPUTED_MEDICAL_JOURNALS
-) + ")"
+# Suggested Specialty Journals Physicians Can Add in 1 Click
+SUGGESTED_EXTRA_JOURNALS: List[Dict[str, str]] = [
+    {"id": "j-clin-oncol", "name": "Journal of Clinical Oncology", "abbrev": "J Clin Oncol", "short": "JCO", "category": "Oncology", "impact_tier": "Specialty Flagship"},
+    {"id": "blood", "name": "Blood", "abbrev": "Blood", "short": "Blood (ASH)", "category": "Hematology", "impact_tier": "Specialty Flagship"},
+    {"id": "diabetes-care", "name": "Diabetes Care", "abbrev": "Diabetes Care", "short": "Diabetes Care (ADA)", "category": "Endocrinology", "impact_tier": "Specialty Flagship"},
+    {"id": "stroke", "name": "Stroke", "abbrev": "Stroke", "short": "Stroke (AHA)", "category": "Neurology / Stroke", "impact_tier": "Specialty Flagship"},
+    {"id": "neurology", "name": "Neurology", "abbrev": "Neurology", "short": "Neurology (AAN)", "category": "Neurology", "impact_tier": "Specialty Flagship"},
+    {"id": "jama-neurol", "name": "JAMA Neurology", "abbrev": "JAMA Neurol", "short": "JAMA Neurol", "category": "Neurology", "impact_tier": "Tier 1 Specialty"},
+    {"id": "jama-oncol", "name": "JAMA Oncology", "abbrev": "JAMA Oncol", "short": "JAMA Oncol", "category": "Oncology", "impact_tier": "Tier 1 Specialty"},
+    {"id": "hepatology", "name": "Hepatology", "abbrev": "Hepatology", "short": "Hepatology (AASLD)", "category": "Hepatology", "impact_tier": "Specialty Flagship"},
+    {"id": "arthritis-rheumatol", "name": "Arthritis & Rheumatology", "abbrev": "Arthritis Rheumatol", "short": "Arthritis Rheumatol (ACR)", "category": "Rheumatology", "impact_tier": "Specialty Flagship"},
+    {"id": "eur-respir-j", "name": "European Respiratory Journal", "abbrev": "Eur Respir J", "short": "Eur Respir J (ERS)", "category": "Pulmonology", "impact_tier": "Specialty Flagship"},
+]
+
+# Mutable Active Journal List (kept in-place so REPUTED_MEDICAL_JOURNALS stays synced)
+ACTIVE_MEDICAL_JOURNALS: List[Dict[str, str]] = [dict(j) for j in DEFAULT_MEDICAL_JOURNALS]
+REPUTED_MEDICAL_JOURNALS: List[Dict[str, str]] = ACTIVE_MEDICAL_JOURNALS
+
+
+def _slugify_journal_id(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "custom-journal"
+
+
+def _normalize_journal_key(text: str) -> str:
+    """Normalizes journal titles/abbreviations for accurate cross-API matching."""
+    if not text:
+        return ""
+    cleaned = text.split(":")[0]
+    cleaned = re.sub(r"\s*\([^)]*\)", "", cleaned)
+    cleaned = cleaned.replace("&", " and ").replace(".", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    if cleaned.startswith("the "):
+        cleaned = cleaned[4:].strip()
+    return cleaned
+
+
+def build_pubmed_journal_filter_clause(journals: List[Dict[str, str]]) -> str:
+    if not journals:
+        return ""
+    clauses: List[str] = []
+    for j in journals:
+        abbrev = j.get("abbrev", "").strip()
+        name = j.get("name", "").strip()
+        if j.get("is_custom") and name and abbrev and name.lower() != abbrev.lower():
+            clauses.append(f'"{abbrev}"[Journal] OR "{name}"[Journal]')
+        elif abbrev:
+            clauses.append(f'"{abbrev}"[Journal]')
+        elif name:
+            clauses.append(f'"{name}"[Journal]')
+    return "(" + " OR ".join(clauses) + ")" if clauses else ""
+
+
+PUBMED_JOURNAL_FILTER_CLAUSE = build_pubmed_journal_filter_clause(ACTIVE_MEDICAL_JOURNALS)
+
+
+def get_active_journals() -> List[Dict[str, str]]:
+    return [dict(j) for j in ACTIVE_MEDICAL_JOURNALS]
+
+
+def add_journal(
+    name: str,
+    abbrev: Optional[str] = None,
+    short: Optional[str] = None,
+    category: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Adds a journal to ACTIVE_MEDICAL_JOURNALS (matching known metadata if recognized)."""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("Journal name cannot be empty.")
+
+    norm_input = _normalize_journal_key(clean_name)
+    norm_abbrev = _normalize_journal_key(abbrev or "")
+
+    # Return existing if already active
+    for existing in ACTIVE_MEDICAL_JOURNALS:
+        if (
+            existing["id"] == _slugify_journal_id(clean_name)
+            or _normalize_journal_key(existing["name"]) == norm_input
+            or _normalize_journal_key(existing["abbrev"]) == norm_input
+            or _normalize_journal_key(existing["short"]) == norm_input
+            or (norm_abbrev and _normalize_journal_key(existing["abbrev"]) == norm_abbrev)
+        ):
+            return {"journal": dict(existing), "already_exists": True, "journals": get_active_journals()}
+
+    # Check if input matches a known default or suggested specialty journal
+    known_catalog = DEFAULT_MEDICAL_JOURNALS + SUGGESTED_EXTRA_JOURNALS
+    for preset in known_catalog:
+        if (
+            preset["id"] == _slugify_journal_id(clean_name)
+            or _normalize_journal_key(preset["name"]) == norm_input
+            or _normalize_journal_key(preset["abbrev"]) == norm_input
+            or _normalize_journal_key(preset["short"]) == norm_input
+            or preset["short"].lower() == clean_name.lower()
+        ):
+            entry = dict(preset)
+            if category and category.strip():
+                entry["category"] = category.strip()
+            ACTIVE_MEDICAL_JOURNALS.append(entry)
+            return {"journal": dict(entry), "already_exists": False, "journals": get_active_journals()}
+
+    eff_abbrev = (abbrev or "").strip() or clean_name
+    eff_short = (short or "").strip() or (eff_abbrev if len(eff_abbrev) <= 24 else eff_abbrev[:22] + "…")
+    eff_category = (category or "").strip() or "Custom / Specialty"
+    base_id = _slugify_journal_id(eff_short if len(eff_short) >= 3 else clean_name)
+    existing_ids = {j["id"] for j in ACTIVE_MEDICAL_JOURNALS}
+    unique_id = base_id
+    idx = 2
+    while unique_id in existing_ids:
+        unique_id = f"{base_id}-{idx}"
+        idx += 1
+
+    new_entry = {
+        "id": unique_id,
+        "name": clean_name,
+        "abbrev": eff_abbrev,
+        "short": eff_short,
+        "category": eff_category,
+        "impact_tier": "Physician Added",
+        "is_custom": True,
+    }
+    ACTIVE_MEDICAL_JOURNALS.append(new_entry)
+    return {"journal": dict(new_entry), "already_exists": False, "journals": get_active_journals()}
+
+
+def remove_journal(journal_id: str) -> List[Dict[str, str]]:
+    """Removes a journal by its slug ID, short name, or abbreviation."""
+    target = (journal_id or "").strip().lower()
+    target_norm = _normalize_journal_key(target)
+    kept = [
+        j for j in ACTIVE_MEDICAL_JOURNALS
+        if not (
+            j["id"].lower() == target
+            or j["short"].lower() == target
+            or j["abbrev"].lower() == target
+            or _normalize_journal_key(j["name"]) == target_norm
+        )
+    ]
+    ACTIVE_MEDICAL_JOURNALS.clear()
+    ACTIVE_MEDICAL_JOURNALS.extend(kept)
+    return get_active_journals()
+
+
+def reset_journals() -> List[Dict[str, str]]:
+    """Restores the default 22 whitelisted medical journals."""
+    ACTIVE_MEDICAL_JOURNALS.clear()
+    ACTIVE_MEDICAL_JOURNALS.extend(dict(j) for j in DEFAULT_MEDICAL_JOURNALS)
+    return get_active_journals()
 
 
 # Verified Landmark Clinical Trials & Official Practice Guidelines (Authentic PMIDs & DOIs)
@@ -271,16 +417,23 @@ VERIFIED_LANDMARK_LITERATURE: List[Dict[str, Any]] = [
 ]
 
 
-def _match_journal_metadata(journal_title: str) -> Optional[Dict[str, str]]:
-    """Checks if a journal title or Medline abbreviation belongs to our strict whitelist."""
-    norm = journal_title.lower().strip()
-    for j in REPUTED_MEDICAL_JOURNALS:
-        if (
-            norm == j["name"].lower()
-            or norm == j["abbrev"].lower()
-            or j["abbrev"].lower() in norm
-            or j["name"].lower() in norm
-        ):
+def _match_journal_metadata(
+    journal_title: str,
+    journals_list: Optional[List[Dict[str, str]]] = None,
+) -> Optional[Dict[str, str]]:
+    """Checks if a journal title, ISO abbreviation, or MedlineTA belongs to the active journal list."""
+    norm = _normalize_journal_key(journal_title)
+    if not norm:
+        return None
+    active_list = journals_list if journals_list is not None else ACTIVE_MEDICAL_JOURNALS
+    for j in active_list:
+        j_name = _normalize_journal_key(j.get("name", ""))
+        j_abbrev = _normalize_journal_key(j.get("abbrev", ""))
+        j_short = _normalize_journal_key(j.get("short", ""))
+        if norm in (j_name, j_abbrev, j_short):
+            return j
+        # Allow prefix match for long custom multi-word journal titles
+        if j.get("is_custom") and len(j_name) >= 12 and (norm.startswith(j_name) or j_name.startswith(norm)):
             return j
     return None
 
@@ -317,28 +470,48 @@ async def search_pubmed_reputed_journals(
     clinical_queries: List[str],
     max_results_per_query: int = 4,
     condition_keywords: Optional[str] = None,
+    pub_type_filter: Optional[str] = None,
+    custom_journals: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Concurrently queries multiple open-source biomedical research APIs:
-      1. NCBI PubMed Entrez E-Utilities (strictly filtered to 22 whitelisted medical journals)
+      1. NCBI PubMed Entrez E-Utilities (strictly filtered to active physician-selected medical journals)
       2. Europe PMC REST API (EMBL-EBI open-access & citation count enrichment)
       3. OpenAlex Scholarly API (latest high-impact works & citation metrics)
       4. ClinicalTrials.gov API v2 (active/recent interventional trials matching the condition)
     """
     import asyncio
 
+    journals_to_use: List[Dict[str, Any]] = (
+        [dict(j) for j in custom_journals]
+        if custom_journals is not None
+        else get_active_journals()
+    )
+    dynamic_pubmed_clause = build_pubmed_journal_filter_clause(journals_to_use)
+
     live_articles: Dict[str, Dict[str, Any]] = {}
     clinical_trials: List[Dict[str, Any]] = []
     executed_pubmed_queries: List[str] = []
     api_status_map: Dict[str, str] = {
-        "NCBI PubMed E-Utilities": "queried",
-        "Europe PMC (EMBL-EBI)": "queried",
-        "OpenAlex Research Graph": "queried",
+        "NCBI PubMed E-Utilities": "queried" if journals_to_use else "skipped (0 journals selected)",
+        "Europe PMC (EMBL-EBI)": "queried" if journals_to_use else "skipped (0 journals selected)",
+        "OpenAlex Research Graph": "queried" if journals_to_use else "skipped (0 journals selected)",
         "ClinicalTrials.gov v2": "queried",
     }
 
+    pub_filter_norm = (pub_type_filter or "all").lower().strip()
+    pubmed_pt_clause = ""
+    if pub_filter_norm == "rct":
+        pubmed_pt_clause = ' AND ("Randomized Controlled Trial"[Publication Type] OR randomized[Title/Abstract])'
+    elif pub_filter_norm == "guideline":
+        pubmed_pt_clause = ' AND ("Practice Guideline"[Publication Type] OR "Guideline"[Publication Type] OR guideline[Title])'
+    elif pub_filter_norm == "review":
+        pubmed_pt_clause = ' AND ("Meta-Analysis"[Publication Type] OR "Systematic Review"[Publication Type] OR "meta-analysis"[Title] OR "systematic review"[Title])'
+
     async def _run_pubmed_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
-        strict_query = f"({raw_q}) AND {PUBMED_JOURNAL_FILTER_CLAUSE}"
+        if not dynamic_pubmed_clause:
+            return []
+        strict_query = f"({raw_q}){pubmed_pt_clause} AND {dynamic_pubmed_clause}"
         executed_pubmed_queries.append(strict_query)
         try:
             esearch_resp = await client.get(
@@ -355,6 +528,7 @@ async def search_pubmed_reputed_journals(
                 return []
             pmids = esearch_resp.json().get("esearchresult", {}).get("idlist", [])
             if not pmids:
+                api_status_map["NCBI PubMed E-Utilities"] = "200 OK (Live)"
                 return []
 
             efetch_resp = await client.get(
@@ -367,18 +541,26 @@ async def search_pubmed_reputed_journals(
             )
             if efetch_resp.status_code == 200:
                 api_status_map["NCBI PubMed E-Utilities"] = "200 OK (Live)"
-                return _parse_pubmed_xml(efetch_resp.text)
+                return _parse_pubmed_xml(efetch_resp.text, journals_to_use)
         except Exception:
             pass
         return []
 
     async def _run_europe_pmc_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
-        epmc_journal_clause = (
-            '(JOURNAL:"N Engl J Med" OR JOURNAL:"Lancet" OR JOURNAL:"JAMA" OR JOURNAL:"BMJ" '
-            'OR JOURNAL:"Circulation" OR JOURNAL:"Eur Heart J" OR JOURNAL:"Kidney Int" '
-            'OR JOURNAL:"Intensive Care Med" OR JOURNAL:"Ann Intern Med")'
-        )
-        q_str = f"({raw_q}) AND {epmc_journal_clause} AND (FIRST_PDATE:[2020-01-01 TO 2026-12-31])"
+        if not journals_to_use:
+            return []
+        # Include up to 14 active journals (prioritizing custom-added journals + flagship journals)
+        prioritized = sorted(journals_to_use, key=lambda item: (0 if item.get("is_custom") else 1))[:14]
+        epmc_parts = [f'JOURNAL:"{j.get("abbrev") or j.get("name")}"' for j in prioritized]
+        epmc_journal_clause = "(" + " OR ".join(epmc_parts) + ")"
+        epmc_pt_clause = ""
+        if pub_filter_norm == "rct":
+            epmc_pt_clause = " AND (randomized OR trial)"
+        elif pub_filter_norm == "guideline":
+            epmc_pt_clause = " AND (guideline)"
+        elif pub_filter_norm == "review":
+            epmc_pt_clause = ' AND ("meta-analysis" OR "systematic review")'
+        q_str = f"({raw_q}){epmc_pt_clause} AND {epmc_journal_clause} AND (FIRST_PDATE:[2020-01-01 TO 2026-12-31])"
         try:
             resp = await client.get(
                 "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
@@ -397,8 +579,13 @@ async def search_pubmed_reputed_journals(
             parsed_epmc: List[Dict[str, Any]] = []
             for it in items:
                 pmid = it.get("pmid")
-                j_title = it.get("journalInfo", {}).get("journal", {}).get("title") or it.get("journalTitle", "")
-                matched_j = _match_journal_metadata(j_title)
+                j_obj = it.get("journalInfo", {}).get("journal", {}) or {}
+                j_title = j_obj.get("title") or it.get("journalTitle", "")
+                j_medline = j_obj.get("medlineAbbreviation") or j_obj.get("isoAbbreviation") or ""
+                matched_j = (
+                    _match_journal_metadata(j_title, journals_to_use)
+                    or _match_journal_metadata(j_medline, journals_to_use)
+                )
                 if not pmid or not matched_j:
                     continue
                 abs_text = it.get("abstractText", "")
@@ -471,11 +658,21 @@ async def search_pubmed_reputed_journals(
             return []
 
     async def _run_openalex_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
+        if not journals_to_use:
+            return []
+        clean_oa_q = re.sub(r"\b(AND|OR)\b|[()]", " ", condition_keywords or raw_q)
+        clean_oa_q = " ".join(clean_oa_q.split())
+        if pub_filter_norm == "rct":
+            clean_oa_q = f"{clean_oa_q} randomized trial"
+        elif pub_filter_norm == "guideline":
+            clean_oa_q = f"{clean_oa_q} guideline"
+        elif pub_filter_norm == "review":
+            clean_oa_q = f"{clean_oa_q} meta-analysis"
         try:
             resp = await client.get(
                 "https://api.openalex.org/works",
                 params={
-                    "search": raw_q,
+                    "search": clean_oa_q,
                     "filter": "from_publication_date:2020-01-01,has_pmid:true,type:article",
                     "sort": "cited_by_count:desc",
                     "per-page": "5",
@@ -493,7 +690,7 @@ async def search_pubmed_reputed_journals(
                 loc = w.get("primary_location") or {}
                 src = loc.get("source") or {}
                 j_name = src.get("display_name", "")
-                matched_j = _match_journal_metadata(j_name)
+                matched_j = _match_journal_metadata(j_name, journals_to_use)
                 if not pmid or not matched_j:
                     continue
                 doi_url = w.get("doi") or ""
@@ -531,7 +728,7 @@ async def search_pubmed_reputed_journals(
     ct_query = condition_keywords or primary_q[:60]
 
     try:
-        async with httpx.AsyncClient(timeout=4.5) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             tasks = [
                 _run_pubmed_query(client, primary_q),
                 _run_europe_pmc_query(client, primary_q),
@@ -557,48 +754,92 @@ async def search_pubmed_reputed_journals(
     except Exception:
         pass
 
-    # Match verified landmark clinical trials & guidelines relevant to the queries
+    # Match verified landmark clinical trials & guidelines relevant to the queries AND active journals
     combined_query_text = " ".join(clinical_queries).lower()
+    min_landmark_score = 2 if len(live_articles) >= 3 else 1
     scored_landmarks = []
     for art in VERIFIED_LANDMARK_LITERATURE:
-        score = sum(1 for kw in art["keywords"] if kw.lower() in combined_query_text)
-        if score > 0:
-            scored_landmarks.append((score, art))
+        matched_landmark_j = _match_journal_metadata(art.get("journal", ""), journals_to_use)
+        if not matched_landmark_j:
+            continue
+        pt_lower = art.get("pub_type", "").lower()
+        if pub_filter_norm == "rct" and "trial" not in pt_lower:
+            continue
+        if pub_filter_norm == "guideline" and "guideline" not in pt_lower:
+            continue
+        if pub_filter_norm == "review" and "meta-analysis" not in pt_lower and "review" not in pt_lower:
+            continue
+        score = sum(
+            2 if (" " in kw and kw.lower() in combined_query_text) else (
+                1 if re.search(rf"\b{re.escape(kw.lower())}\b", combined_query_text) else 0
+            )
+            for kw in art["keywords"]
+        )
+        if score >= min_landmark_score:
+            scored_landmarks.append((score, art, matched_landmark_j))
     scored_landmarks.sort(key=lambda x: x[0], reverse=True)
 
     final_articles: List[Dict[str, Any]] = []
     seen_pmids = set()
 
-    # Include top matched landmark RCTs & official guidelines
-    for _, art in scored_landmarks[:5]:
+    # Include top matched landmark RCTs & official guidelines from active journals
+    for _, art, matched_landmark_j in scored_landmarks[:5]:
         pmid = art["pmid"]
         if pmid not in seen_pmids:
             seen_pmids.add(pmid)
             final_articles.append({
                 **art,
+                "journal": matched_landmark_j["name"],
+                "journal_short": matched_landmark_j["short"],
                 "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 "doi_url": f"https://doi.org/{art['doi']}" if art.get("doi") else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 "source_verification": "PubMed & Landmark Trial Registry",
             })
 
-    # Append live PubMed & Europe PMC articles from reputed journals
+    # Append live PubMed, Europe PMC & OpenAlex articles from active journals
     for pmid, art in live_articles.items():
         if pmid not in seen_pmids:
             seen_pmids.add(pmid)
             final_articles.append(art)
 
+    capped_articles = final_articles[:12]
+
+    # Summarize publications that returned papers in this query
+    matched_counts: Dict[str, Dict[str, Any]] = {}
+    for art in capped_articles:
+        j_short = art.get("journal_short", art.get("journal", "Journal"))
+        if j_short not in matched_counts:
+            matched_j_meta = _match_journal_metadata(art.get("journal", ""), journals_to_use)
+            matched_counts[j_short] = {
+                "id": matched_j_meta["id"] if matched_j_meta else _slugify_journal_id(j_short),
+                "name": art.get("journal", j_short),
+                "short": j_short,
+                "count": 0,
+            }
+        matched_counts[j_short]["count"] += 1
+
+    matched_journals = sorted(
+        matched_counts.values(),
+        key=lambda item: (-item["count"], item["short"]),
+    )
+
     return {
-        "articles": final_articles[:9],
+        "articles": capped_articles,
         "clinical_trials": clinical_trials,
         "open_source_apis": OPEN_SOURCE_RESEARCH_APIS,
         "api_status_map": api_status_map,
         "executed_queries": executed_pubmed_queries,
-        "whitelisted_journals_count": len(REPUTED_MEDICAL_JOURNALS),
+        "covered_journals": journals_to_use,
+        "matched_journals": matched_journals,
+        "whitelisted_journals_count": len(journals_to_use),
         "live_articles_retrieved": len(live_articles),
     }
 
 
-def _parse_pubmed_xml(xml_text: str) -> List[Dict[str, Any]]:
+def _parse_pubmed_xml(
+    xml_text: str,
+    journals_list: Optional[List[Dict[str, str]]] = None,
+) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     try:
         root = ET.fromstring(xml_text)
@@ -615,17 +856,17 @@ def _parse_pubmed_xml(xml_text: str) -> List[Dict[str, Any]]:
             journal_iso_elem = article_elem.find(".//Article/Journal/ISOAbbreviation")
             medline_ta_elem = article_elem.find(".//MedlineJournalInfo/MedlineTA")
 
-            raw_journal = (
-                (journal_title_elem.text if journal_title_elem is not None else "")
-                or (medline_ta_elem.text if medline_ta_elem is not None else "")
-                or (journal_iso_elem.text if journal_iso_elem is not None else "")
-            )
+            j_title_txt = journal_title_elem.text if (journal_title_elem is not None and journal_title_elem.text) else ""
+            j_medline_txt = medline_ta_elem.text if (medline_ta_elem is not None and medline_ta_elem.text) else ""
+            j_iso_txt = journal_iso_elem.text if (journal_iso_elem is not None and journal_iso_elem.text) else ""
+
             matched_j = (
-                _match_journal_metadata(raw_journal)
-                or _match_journal_metadata(medline_ta_elem.text if medline_ta_elem is not None and medline_ta_elem.text else "")
+                _match_journal_metadata(j_title_txt, journals_list)
+                or _match_journal_metadata(j_medline_txt, journals_list)
+                or _match_journal_metadata(j_iso_txt, journals_list)
             )
             if not matched_j:
-                # Strictly enforce journal whitelist
+                # Strictly enforce active journal whitelist
                 continue
 
             year_elem = article_elem.find(".//Article/Journal/JournalIssue/PubDate/Year")

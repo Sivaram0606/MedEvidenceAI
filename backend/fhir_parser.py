@@ -239,6 +239,15 @@ def parse_fhir_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
         for alert in safety_alerts:
             narrative_lines.append(f"- [{alert['severity'].upper()}] {alert['title']}: {alert['detail']}")
 
+    auto_query_bundle = generate_patient_auto_query(
+        patient_info=patient_info,
+        encounter_info=encounter_info,
+        conditions=conditions,
+        observations=observations,
+        medications=medications,
+        allergies=allergies,
+    )
+
     return {
         "patient": patient_info,
         "encounter": encounter_info,
@@ -247,6 +256,8 @@ def parse_fhir_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
         "medications": medications,
         "allergies": allergies,
         "safety_alerts": safety_alerts,
+        "auto_generated_query": auto_query_bundle["query"],
+        "auto_suggested_questions": auto_query_bundle["suggested_questions"],
         "clinical_narrative": "\n".join(narrative_lines),
         "resource_counts": {
             "conditions": len(conditions),
@@ -254,6 +265,104 @@ def parse_fhir_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
             "medications": len(medications),
             "allergies": len(allergies),
         },
+    }
+
+
+def _short_label(text: str, max_len: int = 68) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    # Trim cleanly at parenthetical or word boundary if overly verbose
+    if "(" in cleaned and cleaned.index("(") > 12:
+        base = cleaned[: cleaned.index("(")].strip()
+        if base:
+            return base
+    return cleaned[: max_len - 3].rsplit(" ", 1)[0] + "..."
+
+
+def generate_patient_auto_query(
+    patient_info: Dict[str, Any],
+    encounter_info: Dict[str, Any],
+    conditions: List[Dict[str, Any]],
+    observations: List[Dict[str, Any]],
+    medications: List[Dict[str, Any]],
+    allergies: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Dynamically formulates a patient-specific clinical literature research query
+    and follow-up questions directly from the selected patient's HL7 FHIR R4 chart.
+    """
+    age = patient_info.get("age")
+    gender_raw = (patient_info.get("gender") or "").lower()
+    gender_word = gender_raw if gender_raw in ("male", "female") else "adult"
+    demo_phrase = f"{age}-year-old {gender_word}" if age else f"{gender_word} patient"
+
+    cond_labels = [_short_label(c.get("display", ""), 64) for c in conditions[:3] if c.get("display")]
+    abnormal_obs = [o for o in observations if o.get("is_abnormal")] or observations[:3]
+    obs_labels = [
+        f"{_short_label(o.get('name', ''), 34)} {o.get('value', '')}".strip()
+        for o in abnormal_obs[:3]
+        if o.get("name")
+    ]
+    med_labels = [
+        _short_label(m.get("name", "").split("(")[0].strip(), 38)
+        for m in medications[:3]
+        if m.get("name")
+    ]
+    allergy_labels = [
+        f"{a.get('substance')} ({a.get('reaction')})" if a.get("reaction") else str(a.get("substance"))
+        for a in allergies[:2]
+        if a.get("substance")
+    ]
+
+    if cond_labels:
+        if len(cond_labels) == 1:
+            cond_phrase = cond_labels[0]
+        elif len(cond_labels) == 2:
+            cond_phrase = f"{cond_labels[0]} and {cond_labels[1]}"
+        else:
+            cond_phrase = f"{', '.join(cond_labels[:-1])}, and {cond_labels[-1]}"
+    else:
+        enc_reason = encounter_info.get("reason") or encounter_info.get("type") or "general clinical evaluation"
+        cond_phrase = _short_label(enc_reason, 64)
+
+    context_clauses: List[str] = []
+    if obs_labels:
+        context_clauses.append(f"labs/vitals: {', '.join(obs_labels)}")
+    if med_labels:
+        context_clauses.append(f"medications: {', '.join(med_labels)}")
+    if allergy_labels:
+        context_clauses.append(f"allergies: {', '.join(allergy_labels)}")
+
+    clinical_modifiers = f" ({'; '.join(context_clauses)})" if context_clauses else ""
+
+    auto_query = (
+        f"For a {demo_phrase} with {cond_phrase}{clinical_modifiers}: "
+        f"what do peer-reviewed clinical trials and society guidelines report on comparative therapeutic efficacy, "
+        f"diagnostic cohort criteria, and subgroup safety/exclusion considerations?"
+    )
+
+    primary_topic = cond_labels[0] if cond_labels else cond_phrase
+    suggested: List[str] = [
+        f"Summarize landmark RCT primary endpoints and subgroup outcomes matching {primary_topic}.",
+    ]
+    if obs_labels:
+        suggested.append(
+            f"How do published trial protocols stratify dosing and eligibility for {obs_labels[0]}?"
+        )
+    if allergy_labels or med_labels:
+        med_or_allergy = allergy_labels[0] if allergy_labels else med_labels[0]
+        suggested.append(
+            f"What pharmacokinetic interactions, washout rules, or safety data apply to {med_or_allergy}?"
+        )
+    else:
+        suggested.append(
+            f"What diagnostic workup and biomarker monitoring intervals are recommended in guidelines for {primary_topic}?"
+        )
+
+    return {
+        "query": auto_query,
+        "suggested_questions": suggested[:3],
     }
 
 

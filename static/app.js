@@ -1,26 +1,269 @@
 /**
  * Frontend Application Logic for MedEvidenceAI:
- * Point-of-Care Literature Synthesis, Differential Diagnosis & Precision Treatment Agentic System.
+ * Point-of-Care Workstation with:
+ *   1. Radio Button Query Mode Selector:
+ *        - With FHIR Context (Auto-Generated Query from selected patient)
+ *        - Direct Query Without FHIR Context (Plain query for research articles on any condition)
+ *   2. Dynamic Patient-Specific FHIR Query Auto-Generation
+ *   3. Reputed Medical Journal Whitelist Management (Add / Remove / Restore in Modal)
  */
 
+let activeQuestionMode = "fhir"; // "fhir" | "direct"
 let allCases = [];
 let activeCaseId = null;
 let activeFhirBundle = null;
+let activeParsedFhir = null;
+let activeAutoQuery = "";
+let activePatientSuggestedQuestions = [];
+
+let savedDirectQuery = "";
+let lastExecutedMode = null;
+let activeFetchController = null;
+let pipelineRequestSeq = 0;
+
 let activeRetrievedArticles = [];
+let activeClinicalTrials = [];
 let activeJournalFilter = "ALL";
 let whitelistedJournals = [];
+let suggestedJournals = [];
+
+const DIRECT_PLAIN_QUERY_EXAMPLES = [
+  "Research articles on Acute Ischemic Stroke thrombolysis (tenecteplase vs alteplase)",
+  "HFpEF clinical trials on SGLT2 inhibitors and GLP-1 receptor agonists",
+  "Severe ARDS prone positioning and PEEP titration research articles",
+  "Infective endocarditis diagnostic criteria and antibiotic trial articles",
+  "Lupus nephritis biologic and induction therapy research articles",
+];
 
 document.addEventListener("DOMContentLoaded", async () => {
   setupTabs();
   setupModals();
-  await loadJournalsWhitelist();
-  await loadSampleCases();
 
   document.getElementById("runSynthesisBtn").addEventListener("click", () => {
     runSynthesisPipeline();
   });
+
+  document.getElementById("physicianQuestionInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      runSynthesisPipeline();
+    }
+  });
+
+  setupQuestionModeSelector();
+
+  await Promise.all([loadJournalsWhitelist(), loadSampleCases()]);
 });
 
+/* =========================================================================
+   RADIO BUTTON MODE SELECTOR: WITH FHIR CONTEXT vs DIRECT PLAIN QUERY
+   ========================================================================= */
+function abortActivePipeline() {
+  pipelineRequestSeq += 1;
+  if (activeFetchController) {
+    try {
+      activeFetchController.abort();
+    } catch (_) {
+      // Ignore abort errors
+    }
+    activeFetchController = null;
+  }
+  const runBtn = document.getElementById("runSynthesisBtn");
+  const runBtnText = document.getElementById("runBtnText");
+  if (runBtn) runBtn.disabled = false;
+  if (runBtnText) {
+    runBtnText.textContent =
+      activeQuestionMode === "direct"
+        ? "Search Research Articles"
+        : "Synthesize Research Evidence";
+  }
+}
+
+function clearResultsDom() {
+  activeRetrievedArticles = [];
+  activeClinicalTrials = [];
+  activeJournalFilter = "ALL";
+
+  document.getElementById("pipelineDurationBadge").textContent = "";
+  document.getElementById("agentTraceGrid").innerHTML = "";
+  document.getElementById("primaryDiagnosisBanner").innerHTML = "";
+  document.getElementById("keyTakeawaysBox").innerHTML = "";
+  document.getElementById("pointOfCareAnswerBox").innerHTML = "";
+  document.getElementById("differentialList").innerHTML = "";
+  document.getElementById("treatmentPlanList").innerHTML = "";
+  document.getElementById("warningsList").innerHTML = "";
+  document.getElementById("monitoringList").innerHTML = "";
+  document.getElementById("articlesCountBadge").textContent = "0 Sources";
+  document.getElementById("journalFilterBar").innerHTML = "";
+  document.getElementById("articlesContainer").innerHTML = "";
+}
+
+function setDirectQueryResultsState(state) {
+  // state: "query-only" | "searching" | "results" | "fhir"
+  const wsGrid = document.getElementById("workstationGrid");
+  const traceSection = document.getElementById("agentTraceSection");
+  const synSection = document.getElementById("synthesisResultsContainer");
+  const rightPanel = document.getElementById("panelRightArticles");
+
+  if (state === "query-only") {
+    wsGrid.classList.remove("general-mode");
+    wsGrid.classList.add("direct-query-only");
+    traceSection.classList.add("hidden");
+    synSection.classList.add("hidden");
+    rightPanel.classList.add("hidden");
+  } else if (state === "searching") {
+    wsGrid.classList.remove("general-mode");
+    wsGrid.classList.add("direct-query-only");
+    traceSection.classList.remove("hidden");
+    synSection.classList.add("hidden");
+    rightPanel.classList.add("hidden");
+  } else if (state === "results") {
+    wsGrid.classList.remove("direct-query-only");
+    wsGrid.classList.add("general-mode");
+    traceSection.classList.remove("hidden");
+    synSection.classList.remove("hidden");
+    rightPanel.classList.remove("hidden");
+  } else {
+    // "fhir"
+    wsGrid.classList.remove("direct-query-only");
+    wsGrid.classList.remove("general-mode");
+    traceSection.classList.remove("hidden");
+    synSection.classList.remove("hidden");
+    rightPanel.classList.remove("hidden");
+  }
+}
+
+function setupQuestionModeSelector() {
+  const fhirRadio = document.getElementById("modeFhirRadio");
+  const directRadio = document.getElementById("modeDirectRadio");
+
+  fhirRadio.addEventListener("change", () => {
+    if (fhirRadio.checked) {
+      setQuestionMode("fhir");
+    }
+  });
+
+  directRadio.addEventListener("change", () => {
+    if (directRadio.checked) {
+      setQuestionMode("direct");
+    }
+  });
+
+  document.getElementById("regenerateFhirQueryBtn").addEventListener("click", () => {
+    if (activeQuestionMode !== "fhir") return;
+    if (activeAutoQuery) {
+      document.getElementById("physicianQuestionInput").value = activeAutoQuery;
+      runSynthesisPipeline();
+    }
+  });
+
+  // Sync UI if browser restored Direct Query radio button on reload
+  if (directRadio.checked) {
+    setQuestionMode("direct");
+  }
+}
+
+function setQuestionMode(mode) {
+  if (mode === activeQuestionMode) return;
+
+  const questionInput = document.getElementById("physicianQuestionInput");
+
+  // Save outgoing direct plain query if switching away from direct mode
+  if (activeQuestionMode === "direct") {
+    savedDirectQuery = questionInput.value.trim();
+  }
+
+  activeQuestionMode = mode;
+  const isFhir = mode === "fhir";
+
+  // Cancel any in-flight request from the previous mode so FHIR data never leaks into Direct mode
+  abortActivePipeline();
+
+  const fhirRadio = document.getElementById("modeFhirRadio");
+  const directRadio = document.getElementById("modeDirectRadio");
+  fhirRadio.checked = isFhir;
+  directRadio.checked = !isFhir;
+
+  document.getElementById("labelModeFhir").classList.toggle("active", isFhir);
+  document.getElementById("labelModeDirect").classList.toggle("active", !isFhir);
+
+  // Hide all FHIR controls and panels when Direct Query is selected
+  document.getElementById("fhirHeaderControls").classList.toggle("hidden", !isFhir);
+  document.getElementById("panelLeftFhir").classList.toggle("hidden", !isFhir);
+  document.getElementById("autoQueryStatusRow").classList.toggle("hidden", !isFhir);
+
+  const brandSubtitle = document.getElementById("brandSubtitle");
+  if (brandSubtitle) {
+    brandSubtitle.textContent = isFhir
+      ? "FHIR-Contextualized Literature Synthesis Across PubMed, Europe PMC, OpenAlex & ClinicalTrials.gov v2"
+      : "Direct Clinical Literature & Research Article Search Across PubMed, Europe PMC, OpenAlex & ClinicalTrials.gov v2";
+  }
+
+  const inquiryTitle = document.getElementById("inquiryTitle");
+  const inquirySubtitle = document.getElementById("inquirySubtitle");
+  const dxCardHeading = document.getElementById("dxCardHeading");
+  const runBtnText = document.getElementById("runBtnText");
+
+  if (isFhir) {
+    inquiryTitle.textContent = "Assistive Clinical Literature Inquiry";
+    inquirySubtitle.textContent =
+      "Explore trial outcomes, subgroup analyses, and diagnostic criteria from peer-reviewed journals matching this patient's FHIR profile.";
+    questionInput.rows = 3;
+    questionInput.placeholder = "Auto-generated clinical research question for selected FHIR patient...";
+    dxCardHeading.textContent = "Diagnostic Cohort Parallels & Published Evaluation Criteria";
+    runBtnText.textContent = "Synthesize Research Evidence";
+
+    clearResultsDom();
+    setDirectQueryResultsState("fhir");
+    renderSuggestedChips(activePatientSuggestedQuestions);
+    questionInput.value = activeAutoQuery || "";
+
+    if (activeCaseId || activeFhirBundle) {
+      runSynthesisPipeline();
+    }
+  } else {
+    inquiryTitle.textContent = "Direct Condition & Research Article Query";
+    inquirySubtitle.textContent =
+      "Enter any plain query for a medical condition or clinical topic to independently retrieve peer-reviewed research articles and NCT trials.";
+    questionInput.rows = 3;
+    questionInput.placeholder =
+      "Enter a plain query for research articles on any condition (e.g., Acute ischemic stroke, research articles on HFpEF, lupus nephritis trials)...";
+    dxCardHeading.textContent = "Published Study Cohorts, Subtypes & Diagnostic Criteria";
+    runBtnText.textContent = "Search Research Articles";
+
+    // Clear all FHIR data and show ONLY the query window until a direct query is submitted
+    clearResultsDom();
+    setDirectQueryResultsState("query-only");
+    renderSuggestedChips(DIRECT_PLAIN_QUERY_EXAMPLES);
+    questionInput.value = savedDirectQuery || "";
+    questionInput.focus();
+  }
+}
+
+function renderSuggestedChips(questionsList) {
+  const wrap = document.getElementById("suggestedQuestionsWrap");
+  wrap.innerHTML = (questionsList || [])
+    .map(
+      (q) =>
+        `<button type="button" class="suggested-chip" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`
+    )
+    .join("");
+
+  wrap.querySelectorAll(".suggested-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const qText = btn.getAttribute("data-question") || "";
+      document.getElementById("physicianQuestionInput").value = qText;
+      if (activeQuestionMode === "direct") {
+        savedDirectQuery = qText;
+      }
+      runSynthesisPipeline();
+    });
+  });
+}
+
+/* =========================================================================
+   LEFT PANEL CHART TABS & MODALS
+   ========================================================================= */
 function setupTabs() {
   const tabs = document.querySelectorAll(".chart-tab");
   tabs.forEach((btn) => {
@@ -47,9 +290,43 @@ function setupModals() {
 
   document.getElementById("openJournalsModalBtn").addEventListener("click", () => {
     journalsModal.classList.remove("hidden");
+    renderModalJournalsList(document.getElementById("modalJournalSearchInput").value);
   });
   document.getElementById("closeJournalsModalBtn").addEventListener("click", () => {
     journalsModal.classList.add("hidden");
+  });
+
+  // Journal Add / Remove / Reset inside Modal
+  const triggerModalAdd = async () => {
+    const nameInput = document.getElementById("customJournalNameInput");
+    const abbrevInput = document.getElementById("customJournalAbbrevInput");
+    const catInput = document.getElementById("customJournalCategoryInput");
+    const nameVal = nameInput.value.trim();
+    if (!nameVal) {
+      nameInput.focus();
+      return;
+    }
+    await addJournalApi({
+      name: nameVal,
+      abbrev: abbrevInput.value.trim() || null,
+      category: catInput.value.trim() || null,
+    });
+    nameInput.value = "";
+    abbrevInput.value = "";
+    catInput.value = "";
+  };
+
+  document.getElementById("addCustomJournalBtn").addEventListener("click", triggerModalAdd);
+  document.getElementById("customJournalNameInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      triggerModalAdd();
+    }
+  });
+
+  document.getElementById("modalResetJournalsBtn").addEventListener("click", resetJournalsApi);
+  document.getElementById("modalJournalSearchInput").addEventListener("input", (e) => {
+    renderModalJournalsList(e.target.value);
   });
 
   // File input reader for custom FHIR JSON
@@ -81,7 +358,7 @@ function setupModals() {
     }
   });
 
-  // Parse and load custom FHIR JSON into the workstation
+  // Parse and load custom FHIR JSON into the workstation with auto-generated query
   document.getElementById("loadCustomFhirBtn").addEventListener("click", async () => {
     const rawText = document.getElementById("customFhirJsonTextarea").value.trim();
     if (!rawText) return;
@@ -97,10 +374,26 @@ function setupModals() {
 
       activeCaseId = null;
       activeFhirBundle = data.fhir_bundle;
+      activeParsedFhir = data.parsed_fhir;
+      activeAutoQuery =
+        data.auto_generated_query ||
+        (data.parsed_fhir && data.parsed_fhir.auto_generated_query) ||
+        "Synthesize peer-reviewed clinical trial outcomes and society guidelines matching this patient's HL7 FHIR R4 clinical profile.";
+      activePatientSuggestedQuestions =
+        data.suggested_questions ||
+        (data.parsed_fhir && data.parsed_fhir.auto_suggested_questions) ||
+        [];
+
+      if (activeQuestionMode !== "fhir") {
+        setQuestionMode("fhir");
+      }
+
       renderPatientChart(data.parsed_fhir, data.fhir_bundle);
+      updateAutoQueryBanner(data.parsed_fhir);
+      renderSuggestedChips(activePatientSuggestedQuestions);
+      document.getElementById("physicianQuestionInput").value = activeAutoQuery;
+
       fhirModal.classList.add("hidden");
-      document.getElementById("physicianQuestionInput").value =
-        "Based on this patient's FHIR R4 clinical data, what is the evidence-based differential diagnosis and recommended treatment plan from reputed medical journals?";
       await runSynthesisPipeline();
     } catch (err) {
       alert("Invalid FHIR JSON: " + err.message);
@@ -108,36 +401,145 @@ function setupModals() {
   });
 }
 
+/* =========================================================================
+   JOURNALS WHITELIST MANAGEMENT
+   ========================================================================= */
 async function loadJournalsWhitelist() {
   try {
     const resp = await fetch("/api/journals");
     const data = await resp.json();
-    whitelistedJournals = data.journals || [];
-    document.getElementById("journalCountBadge").textContent =
-      `${whitelistedJournals.length} Reputed Journals`;
-
-    const container = document.getElementById("journalsTableContainer");
-    container.innerHTML = whitelistedJournals
-      .map(
-        (j) => `
-        <div class="journal-whitelist-item">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <strong style="color:#fff;font-size:13px;">${escapeHtml(j.name)}</strong>
-            <span class="badge-pill badge-teal">${escapeHtml(j.short)}</span>
-          </div>
-          <div style="font-size:11.5px;color:#94a3b8;">
-            Specialty: <span style="color:#cbd5e1;">${escapeHtml(j.category)}</span> &bull;
-            PubMed Filter: <code style="color:#38bdf8;">"${escapeHtml(j.abbrev)}"[Journal]</code>
-          </div>
-        </div>
-      `
-      )
-      .join("");
+    applyJournalsData(data);
   } catch (err) {
     console.error("Failed to load journals whitelist:", err);
   }
 }
 
+async function addJournalApi(payload) {
+  try {
+    const resp = await fetch("/api/journals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Failed to add journal");
+    applyJournalsData(data);
+  } catch (err) {
+    alert("Could not add journal: " + err.message);
+  }
+}
+
+async function removeJournalApi(journalId) {
+  try {
+    const resp = await fetch(`/api/journals/${encodeURIComponent(journalId)}`, {
+      method: "DELETE",
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Failed to remove journal");
+    applyJournalsData(data);
+  } catch (err) {
+    console.error("Could not remove journal:", err);
+  }
+}
+
+async function resetJournalsApi() {
+  try {
+    const resp = await fetch("/api/journals/reset", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || "Failed to reset journals");
+    applyJournalsData(data);
+  } catch (err) {
+    console.error("Could not reset journals:", err);
+  }
+}
+
+function applyJournalsData(data) {
+  whitelistedJournals = data.journals || [];
+  suggestedJournals = data.suggested_journals || [];
+
+  document.getElementById("journalCountBadge").textContent =
+    `${whitelistedJournals.length} Reputed Journals & 4 Open APIs`;
+
+  renderSuggestedJournalChips();
+  const searchInput = document.getElementById("modalJournalSearchInput");
+  renderModalJournalsList(searchInput ? searchInput.value : "");
+}
+
+function renderSuggestedJournalChips() {
+  const wrap = document.getElementById("suggestedJournalsWrap");
+  if (!wrap) return;
+  if (!suggestedJournals.length) {
+    wrap.innerHTML = `<span class="text-muted">All preset journals are currently active.</span>`;
+    return;
+  }
+  wrap.innerHTML = suggestedJournals
+    .slice(0, 10)
+    .map(
+      (s) => `
+      <button type="button" class="suggested-chip" data-add-jname="${escapeHtml(s.name)}" title="${escapeHtml(s.name)} (${escapeHtml(s.category)})">
+        + ${escapeHtml(s.short)} <span style="color:#64748b;">(${escapeHtml(s.category)})</span>
+      </button>
+    `
+    )
+    .join("");
+
+  wrap.querySelectorAll("[data-add-jname]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      addJournalApi({ name: btn.getAttribute("data-add-jname") });
+    });
+  });
+}
+
+function renderModalJournalsList(filterText) {
+  const countEl = document.getElementById("modalActiveJournalsCount");
+  if (countEl) {
+    countEl.textContent = `Active Reputed Journals (${whitelistedJournals.length})`;
+  }
+
+  const q = (filterText || "").toLowerCase().trim();
+  const filtered = whitelistedJournals.filter((j) => {
+    if (!q) return true;
+    return `${j.name} ${j.short} ${j.abbrev} ${j.category}`.toLowerCase().includes(q);
+  });
+
+  const container = document.getElementById("journalsTableContainer");
+  if (!container) return;
+
+  if (!filtered.length) {
+    container.innerHTML = `<div class="fhir-item-card" style="grid-column:1/-1;color:#94a3b8;text-align:center;">No active journals match your filter.</div>`;
+    return;
+  }
+
+  container.innerHTML = filtered
+    .map(
+      (j) => `
+      <div class="journal-whitelist-item">
+        <div style="min-width:0;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+            <strong style="color:#fff;font-size:13px;">${escapeHtml(j.name)}</strong>
+            <span class="badge-pill badge-teal">${escapeHtml(j.short)}</span>
+          </div>
+          <div style="font-size:11.5px;color:#94a3b8;">
+            Specialty: <span style="color:#cbd5e1;">${escapeHtml(j.category || "Medical")}</span> &bull;
+            PubMed Filter: <code style="color:#38bdf8;">"${escapeHtml(j.abbrev)}"[Journal]</code>
+          </div>
+        </div>
+        <button type="button" class="journal-item-remove-btn" data-modal-remove-jid="${escapeHtml(j.id)}">Remove</button>
+      </div>
+    `
+    )
+    .join("");
+
+  container.querySelectorAll("[data-modal-remove-jid]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      removeJournalApi(btn.getAttribute("data-modal-remove-jid"));
+    });
+  });
+}
+
+/* =========================================================================
+   SAMPLE FHIR PATIENT CASES & AUTO-GENERATED QUERY
+   ========================================================================= */
 async function loadSampleCases() {
   try {
     const resp = await fetch("/api/cases");
@@ -164,33 +566,42 @@ async function loadSampleCases() {
   }
 }
 
+function updateAutoQueryBanner(parsed) {
+  const p = (parsed && parsed.patient) || {};
+  const conds = (parsed && parsed.conditions) || [];
+  const primaryCond = conds.length ? conds[0].display.split("(")[0].trim() : "FHIR R4 Profile";
+  const demo = [p.age ? `${p.age}yo` : "", p.gender || ""].filter(Boolean).join(" ");
+  const summaryParts = [demo, primaryCond].filter(Boolean).join(" • ");
+
+  const labelEl = document.getElementById("autoQueryPatientLabel");
+  if (labelEl) {
+    labelEl.innerHTML = `&#10024; Auto-generated query from FHIR patient: <strong>${escapeHtml(p.name || "Selected Patient")}</strong>${summaryParts ? ` (${escapeHtml(summaryParts)})` : ""}`;
+  }
+}
+
 async function selectCase(caseId) {
   const found = allCases.find((c) => c.case_id === caseId);
   if (!found) return;
 
   activeCaseId = found.case_id;
   activeFhirBundle = found.fhir_bundle;
+  activeParsedFhir = found.parsed_fhir;
+
+  // Dynamically auto-generate the query depending on the patient selected
+  activeAutoQuery =
+    found.auto_generated_query ||
+    (found.parsed_fhir && found.parsed_fhir.auto_generated_query) ||
+    found.default_question;
+  activePatientSuggestedQuestions = found.suggested_questions || [];
 
   renderPatientChart(found.parsed_fhir, found.fhir_bundle);
+  updateAutoQueryBanner(found.parsed_fhir);
 
-  // Populate suggested clinical questions
-  const suggestedWrap = document.getElementById("suggestedQuestionsWrap");
-  suggestedWrap.innerHTML = (found.suggested_questions || [])
-    .map(
-      (q) =>
-        `<button class="suggested-chip" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`
-    )
-    .join("");
-
-  suggestedWrap.querySelectorAll(".suggested-chip").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.getElementById("physicianQuestionInput").value = btn.getAttribute("data-question");
-      runSynthesisPipeline();
-    });
-  });
-
-  document.getElementById("physicianQuestionInput").value = found.default_question;
-  await runSynthesisPipeline();
+  if (activeQuestionMode === "fhir") {
+    renderSuggestedChips(activePatientSuggestedQuestions);
+    document.getElementById("physicianQuestionInput").value = activeAutoQuery;
+    await runSynthesisPipeline();
+  }
 }
 
 function renderPatientChart(parsed, rawBundle) {
@@ -272,29 +683,29 @@ function renderPatientChart(parsed, rawBundle) {
     )
     .join("");
 
-  // Render Medications & Allergies
+  // Render Meds & Allergies
   const meds = parsed.medications || [];
   const allergies = parsed.allergies || [];
   document.getElementById("tab-meds").innerHTML = `
-    <div style="font-size:11.5px;font-weight:700;color:#94a3b8;text-transform:uppercase;">Allergies &amp; Intolerances (${allergies.length})</div>
+    <div style="font-size:11.5px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:2px;">Allergies (${allergies.length})</div>
     ${
       allergies.length
         ? allergies
             .map(
               (al) => `
-          <div class="fhir-item-card" style="border-color:rgba(244,63,94,0.4);">
+          <div class="fhir-item-card" style="border-color:rgba(244,63,94,0.35);">
             <div class="fhir-item-top">
               <span class="fhir-item-title" style="color:#fda4af;">${escapeHtml(al.substance)}</span>
               <span class="flag-badge flag-HH">${escapeHtml(al.criticality)}</span>
             </div>
-            <div style="font-size:12px;color:#cbd5e1;">Reaction: ${escapeHtml(al.reaction)}</div>
+            <div style="font-size:12px;color:#cbd5e1;">${escapeHtml(al.reaction)}</div>
           </div>
         `
             )
             .join("")
         : `<div class="fhir-item-card">No Known Drug Allergies</div>`
     }
-    <div style="font-size:11.5px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-top:8px;">Active &amp; Recent Medications (${meds.length})</div>
+    <div style="font-size:11.5px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-top:8px;margin-bottom:2px;">Medications (${meds.length})</div>
     ${meds
       .map(
         (m) => `
@@ -303,56 +714,132 @@ function renderPatientChart(parsed, rawBundle) {
             <span class="fhir-item-title">${escapeHtml(m.name)}</span>
             <span class="fhir-code-tag">${escapeHtml(m.status.toUpperCase())}</span>
           </div>
-          ${m.rxnorm ? `<div style="margin-top:4px;"><span class="fhir-code-tag">RxNorm: ${escapeHtml(m.rxnorm)}</span></div>` : ""}
+          ${m.rxnorm ? `<div class="fhir-code-tag" style="display:inline-block;margin-top:4px;">RxNorm: ${escapeHtml(m.rxnorm)}</div>` : ""}
         </div>
       `
       )
       .join("")}
   `;
 
-  // Raw FHIR Bundle JSON
   document.getElementById("rawFhirPre").textContent = JSON.stringify(rawBundle, null, 2);
 }
 
-let activeClinicalTrials = [];
-
+/* =========================================================================
+   4-AGENT RESEARCH SYNTHESIS PIPELINE EXECUTION
+   ========================================================================= */
 async function runSynthesisPipeline() {
-  const question = document.getElementById("physicianQuestionInput").value.trim();
-  if (!question) return;
+  const inputEl = document.getElementById("physicianQuestionInput");
+  let question = inputEl.value.trim();
+  const isDirectMode = activeQuestionMode === "direct";
+
+  if (isDirectMode) {
+    if (!question) {
+      inputEl.style.borderColor = "#f43f5e";
+      setTimeout(() => {
+        inputEl.style.borderColor = "";
+      }, 1800);
+      inputEl.focus();
+      return;
+    }
+    savedDirectQuery = question;
+  } else {
+    if (!question && activeAutoQuery) {
+      question = activeAutoQuery;
+      inputEl.value = activeAutoQuery;
+    }
+    if (!question) {
+      inputEl.focus();
+      return;
+    }
+  }
+
+  // Cancel any prior in-flight synthesis request
+  if (activeFetchController) {
+    try {
+      activeFetchController.abort();
+    } catch (_) {
+      // Ignore abort errors
+    }
+  }
+  const controller = new AbortController();
+  activeFetchController = controller;
+  const requestSeq = ++pipelineRequestSeq;
+  const requestMode = activeQuestionMode;
+
+  if (isDirectMode) {
+    clearResultsDom();
+    setDirectQueryResultsState("searching");
+  } else {
+    setDirectQueryResultsState("fhir");
+  }
 
   const runBtn = document.getElementById("runSynthesisBtn");
   const runBtnText = document.getElementById("runBtnText");
   runBtn.disabled = true;
-  runBtnText.textContent = "Querying Open APIs & Flash 3.8...";
+  runBtnText.textContent = isDirectMode
+    ? "Searching Research Articles..."
+    : "Running 4-Agent Research Pipeline...";
+
+  const agent1Title = isDirectMode
+    ? "Agent 1: Plain Condition Query Formulator"
+    : "Agent 1: FHIR Phenotyper";
+  const agent1Details = isDirectMode
+    ? "Extracting condition &amp; biomedical search terms from plain query..."
+    : "Parsing HL7 FHIR R4 resources...";
+
+  document.getElementById("pipelineDurationBadge").textContent = "Running...";
+  document.getElementById("agentTraceGrid").innerHTML = `
+    <div class="agent-step-card"><div class="agent-step-top"><span>${agent1Title}</span><span>...</span></div><div class="agent-step-details">${agent1Details}</div></div>
+    <div class="agent-step-card"><div class="agent-step-top"><span>Agent 2: Open Research APIs</span><span>...</span></div><div class="agent-step-details">Querying PubMed, Europe PMC, OpenAlex &amp; ClinicalTrials.gov...</div></div>
+    <div class="agent-step-card"><div class="agent-step-top"><span>Agent 3: Diagnostic Literature</span><span>...</span></div><div class="agent-step-details">Analyzing study cohorts &amp; evaluation criteria...</div></div>
+    <div class="agent-step-card"><div class="agent-step-top"><span>Agent 4: Trial Synthesizer</span><span>...</span></div><div class="agent-step-details">Synthesizing non-prescriptive trial outcomes...</div></div>
+  `;
 
   try {
-    const resp = await fetch("/api/synthesize", {
+    const endpoint = isDirectMode ? "/api/general-question" : "/api/synthesize";
+    const payload = isDirectMode
+      ? {
+          physician_question: question,
+          selected_journals: whitelistedJournals,
+        }
+      : {
+          case_id: activeCaseId,
+          fhir_bundle: activeFhirBundle,
+          physician_question: question,
+          selected_journals: whitelistedJournals,
+        };
+
+    const resp = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        case_id: activeCaseId,
-        fhir_bundle: activeFhirBundle,
-        physician_question: question,
-      }),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
     });
 
     const data = await resp.json();
+    if (requestSeq !== pipelineRequestSeq || requestMode !== activeQuestionMode) {
+      return;
+    }
     if (!resp.ok) throw new Error(data.detail || "Synthesis error");
 
-    document.getElementById("engineBadge").textContent = data.engine_mode || "Gemini Flash 3.8 Copilot";
-    document.getElementById("pipelineDurationBadge").textContent =
-      `Completed in ${data.total_duration_ms} ms`;
+    lastExecutedMode = activeQuestionMode;
+    document.getElementById("engineBadge").textContent = data.engine_mode || "Gemini Flash 3.8";
+    document.getElementById("pipelineDurationBadge").textContent = `Total: ${data.total_duration_ms} ms`;
 
-    // Render Open-Source Research API live status badges
+    // Render live Open API connection status badges
     const statusMap = data.api_status_map || {};
     const statusEl = document.getElementById("openApiStatusBadges");
     if (statusEl) {
       statusEl.innerHTML = Object.entries(statusMap)
         .map(
           ([apiName, st]) =>
-            `<span class="badge-pill badge-teal" title="${escapeHtml(st)}">&#10003; ${escapeHtml(apiName)}</span>`
+            `<span class="badge-pill badge-teal" title="${escapeHtml(st)}">&#10003; ${escapeHtml(apiName.split(" ")[0])}</span>`
         )
         .join("");
+    }
+
+    if (isDirectMode) {
+      setDirectQueryResultsState("results");
     }
 
     renderAgentTrace(data.agent_trace || []);
@@ -360,13 +847,27 @@ async function runSynthesisPipeline() {
     activeClinicalTrials = data.clinical_trials || [];
     activeJournalFilter = "ALL";
     renderJournalEvidencePanel(activeRetrievedArticles);
-    renderClinicalSynthesis(data.synthesis || {});
+    renderClinicalSynthesis(data.synthesis || {}, activeQuestionMode);
   } catch (err) {
+    if (err && err.name === "AbortError") {
+      return;
+    }
+    if (requestSeq !== pipelineRequestSeq) {
+      return;
+    }
+    if (isDirectMode) {
+      setDirectQueryResultsState("query-only");
+    }
     console.error("Synthesis Pipeline Error:", err);
-    alert("Error running research synthesis pipeline: " + err.message);
+    alert("Error running clinical synthesis: " + err.message);
   } finally {
-    runBtn.disabled = false;
-    runBtnText.textContent = "Synthesize Research Evidence";
+    if (requestSeq === pipelineRequestSeq) {
+      runBtn.disabled = false;
+      runBtnText.textContent =
+        activeQuestionMode === "direct"
+          ? "Search Research Articles"
+          : "Synthesize Research Evidence";
+    }
   }
 }
 
@@ -387,88 +888,97 @@ function renderAgentTrace(trace) {
     .join("");
 }
 
-function renderClinicalSynthesis(syn) {
-  // Primary Cohort Classification Banner
+function renderClinicalSynthesis(syn, mode = "fhir") {
+  const isDirect = mode === "direct";
+  const bannerPrefix = isDirect ? "Direct Research Scope:" : "Cohort Phenotype:";
+  const cohortMetaLabel = isDirect
+    ? "Published Study Cohort & Phenotype"
+    : "Patient FHIR Phenotype Parallels";
+
   document.getElementById("primaryDiagnosisBanner").innerHTML = `
-    <strong>Published Cohort Alignment (FHIR Phenotype):</strong> ${formatClinicalTextWithPmidLinks(syn.primary_diagnosis_summary || "")}
+    <strong>${bannerPrefix}</strong> ${formatClinicalTextWithPmidLinks(syn.primary_diagnosis_summary || "")}
   `;
 
-  // Key Takeaways
+  // Key Trial Findings
   const takeaways = syn.key_clinical_takeaways || [];
   document.getElementById("keyTakeawaysBox").innerHTML = `
-    <div class="takeaways-title">Key Published Trial &amp; Guideline Findings</div>
+    <div class="takeaways-title">Key Trial &amp; Guideline Findings (For Physician Review)</div>
     <ul class="takeaways-list">
       ${takeaways.map((t) => `<li>${formatClinicalTextWithPmidLinks(t)}</li>`).join("")}
     </ul>
   `;
 
-  // Detailed Point-of-Care Literature Synthesis
+  // Peer-Reviewed Literature Synthesis Narrative
   const paragraphs = (syn.point_of_care_answer || "").split(/\n\n+/);
   document.getElementById("pointOfCareAnswerBox").innerHTML = paragraphs
     .map((p) => `<p>${formatClinicalTextWithPmidLinks(p)}</p>`)
     .join("");
 
-  // Diagnostic Cohort Parallels
+  // Diagnostic Cohort Parallels / Study Cohorts
   const diffs = syn.differential_diagnoses || [];
-  document.getElementById("differentialList").innerHTML = diffs
-    .map(
-      (d) => `
-      <div class="dx-item-card">
-        <div class="dx-top-row">
-          <span class="dx-title">${escapeHtml(d.diagnosis)}</span>
-          <span class="badge-pill badge-teal">${escapeHtml(d.likelihood)}</span>
-        </div>
-        <div class="dx-meta-grid">
-          <div class="dx-meta-box">
-            <div class="dx-meta-label">Patient FHIR Phenotype Parallels</div>
-            <div>${escapeHtml(d.fhir_evidence)}</div>
+  document.getElementById("differentialList").innerHTML = diffs.length
+    ? diffs
+        .map(
+          (d) => `
+        <div class="dx-item-card">
+          <div class="dx-top-row">
+            <span class="dx-title">${escapeHtml(d.diagnosis)}</span>
+            <span class="badge-pill badge-teal">${escapeHtml(d.likelihood)}</span>
           </div>
-          <div class="dx-meta-box">
-            <div class="dx-meta-label">Diagnostic Evaluation Criteria in Literature</div>
-            <div>${escapeHtml(d.diagnostic_workup)}</div>
+          <div class="dx-meta-grid">
+            <div class="dx-meta-box">
+              <div class="dx-meta-label">${cohortMetaLabel}</div>
+              <div>${escapeHtml(d.fhir_evidence)}</div>
+            </div>
+            <div class="dx-meta-box">
+              <div class="dx-meta-label">Diagnostic Evaluation Criteria in Literature</div>
+              <div>${escapeHtml(d.diagnostic_workup)}</div>
+            </div>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <span style="font-size:11px;color:#94a3b8;">Peer-Reviewed Citations:</span>
+            ${(d.supporting_pmids || [])
+              .map(
+                (pmid) =>
+                  `<button class="pmid-chip" onclick="focusArticle('${escapeHtml(pmid)}')">PMID: ${escapeHtml(pmid)}</button>`
+              )
+              .join("")}
           </div>
         </div>
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          <span style="font-size:11px;color:#94a3b8;">Peer-Reviewed Citations:</span>
-          ${(d.supporting_pmids || [])
-            .map(
-              (pmid) =>
-                `<button class="pmid-chip" onclick="focusArticle('${escapeHtml(pmid)}')">PMID: ${escapeHtml(pmid)}</button>`
-            )
-            .join("")}
-        </div>
-      </div>
-    `
-    )
-    .join("");
+      `
+        )
+        .join("")
+    : `<div class="fhir-item-card" style="color:#94a3b8;">No subtype stratification extracted for this query.</div>`;
 
   // Comparative Therapeutic Evidence Matrix
   const txPlan = syn.treatment_plan || [];
-  document.getElementById("treatmentPlanList").innerHTML = txPlan
-    .map(
-      (tx) => `
-      <div class="tx-item-card">
-        <div class="tx-category-label">${escapeHtml(tx.category)}</div>
-        <div class="tx-top-row">
-          <span class="tx-title">${escapeHtml(tx.intervention)}</span>
-          <span class="badge-pill badge-indigo">${escapeHtml(tx.evidence_grade)}</span>
+  document.getElementById("treatmentPlanList").innerHTML = txPlan.length
+    ? txPlan
+        .map(
+          (tx) => `
+        <div class="tx-item-card">
+          <div class="tx-category-label">${escapeHtml(tx.category)}</div>
+          <div class="tx-top-row">
+            <span class="tx-title">${escapeHtml(tx.intervention)}</span>
+            <span class="badge-pill badge-indigo">${escapeHtml(tx.evidence_grade)}</span>
+          </div>
+          <div style="font-size:13px;color:#cbd5e1;margin-bottom:8px;">
+            ${formatClinicalTextWithPmidLinks(tx.rationale)}
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <span style="font-size:11px;color:#94a3b8;">Verified Journal Evidence:</span>
+            ${(tx.supporting_pmids || [])
+              .map(
+                (pmid) =>
+                  `<button class="pmid-chip" onclick="focusArticle('${escapeHtml(pmid)}')">PMID: ${escapeHtml(pmid)}</button>`
+              )
+              .join("")}
+          </div>
         </div>
-        <div style="font-size:13px;color:#cbd5e1;margin-bottom:8px;">
-          ${formatClinicalTextWithPmidLinks(tx.rationale)}
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          <span style="font-size:11px;color:#94a3b8;">Verified Journal Evidence:</span>
-          ${(tx.supporting_pmids || [])
-            .map(
-              (pmid) =>
-                `<button class="pmid-chip" onclick="focusArticle('${escapeHtml(pmid)}')">PMID: ${escapeHtml(pmid)}</button>`
-            )
-            .join("")}
-        </div>
-      </div>
-    `
-    )
-    .join("");
+      `
+        )
+        .join("")
+    : `<div class="fhir-item-card" style="color:#94a3b8;">No interventional trial comparisons extracted for this query.</div>`;
 
   // Trial Exclusions & Study Endpoints
   const warnings = syn.contraindications_and_warnings || [];
