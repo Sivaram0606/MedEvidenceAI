@@ -1,0 +1,272 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1240" width="1240" height="1240" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#eef2f6"/>
+    </linearGradient>
+    <linearGradient id="headerGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="55%" stop-color="#0f3d4c"/>
+      <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+    <linearGradient id="tealCard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f0fdfa"/>
+      <stop offset="100%" stop-color="#ccfbf1"/>
+    </linearGradient>
+    <linearGradient id="blueCard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#eff6ff"/>
+      <stop offset="100%" stop-color="#dbeafe"/>
+    </linearGradient>
+    <linearGradient id="indigoCard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#eef2ff"/>
+      <stop offset="100%" stop-color="#e0e7ff"/>
+    </linearGradient>
+    <linearGradient id="amberCard" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fffbeb"/>
+      <stop offset="100%" stop-color="#fef3c7"/>
+    </linearGradient>
+    <linearGradient id="emeraldOut" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ecfdf5"/>
+      <stop offset="100%" stop-color="#eff6ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrowSlate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#0d9488"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowIndigo" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <!-- Outer Canvas -->
+  <rect x="0" y="0" width="1240" height="1240" rx="16" fill="url(#bgGrad)" stroke="#cbd5e1" stroke-width="2"/>
+
+  <!-- Top Title Banner -->
+  <rect x="28" y="24" width="1184" height="78" rx="12" fill="url(#headerGrad)" filter="url(#shadow)"/>
+  <text x="620" y="55" text-anchor="middle" fill="#ffffff" font-size="21" font-weight="800" letter-spacing="0.3">
+    MedEvidenceAI • Multi-Agent Clinical Literature &amp; FHIR R4 Architecture
+  </text>
+  <text x="620" y="81" text-anchor="middle" fill="#99f6e4" font-size="13" font-weight="600">
+    Dual-Mode Radio-Button Routing (With FHIR R4 Context vs. Direct Plain Condition Query) • 4 Open Biomedical APIs • Gemini Flash 3.8
+  </text>
+
+  <!-- ======================================================================= -->
+  <!-- LAYER 1: PHYSICIAN UI & RADIO-BUTTON ROUTER                             -->
+  <!-- ======================================================================= -->
+  <rect x="28" y="124" width="1184" height="172" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="28" y="124" width="1184" height="32" rx="12" fill="#e2e8f0"/>
+  <rect x="28" y="142" width="1184" height="14" fill="#e2e8f0"/>
+  <text x="48" y="145" fill="#0f172a" font-size="12.5" font-weight="800" letter-spacing="0.6">
+    LAYER 1 • POINT-OF-CARE PHYSICIAN WORKSTATION &amp; RADIO-BUTTON QUERY MODE ROUTER
+  </text>
+
+  <!-- Mode 1 Box (Left) -->
+  <rect x="48" y="170" width="554" height="112" rx="10" fill="url(#tealCard)" stroke="#0d9488" stroke-width="2"/>
+  <circle cx="70" cy="193" r="7" fill="#ffffff" stroke="#0d9488" stroke-width="2.5"/>
+  <circle cx="70" cy="193" r="3.5" fill="#0d9488"/>
+  <text x="86" y="198" fill="#0f766e" font-size="13.5" font-weight="800">
+    Radio Option 1: With FHIR Context (POST /api/synthesize)
+  </text>
+  <text x="66" y="222" fill="#1e293b" font-size="12" font-weight="600">
+    • Ingests Sample Cohort or External HL7 FHIR R4 Bundle / URL
+  </text>
+  <text x="66" y="243" fill="#1e293b" font-size="12" font-weight="600">
+    • Dynamically auto-generates query from selected patient chart
+  </text>
+  <text x="66" y="264" fill="#0f766e" font-size="11.5" font-weight="700">
+    • 3-Column View: FHIR R4 Chart + Synthesis + Journal Evidence
+  </text>
+
+  <!-- Mode 2 Box (Right) -->
+  <rect x="638" y="170" width="554" height="112" rx="10" fill="url(#blueCard)" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="660" cy="193" r="7" fill="#ffffff" stroke="#2563eb" stroke-width="2.5"/>
+  <circle cx="660" cy="193" r="3.5" fill="#2563eb"/>
+  <text x="676" y="198" fill="#1d4ed8" font-size="13.5" font-weight="800">
+    Radio Option 2: Direct Plain Query — No FHIR (/api/general-question)
+  </text>
+  <text x="656" y="222" fill="#1e293b" font-size="12" font-weight="600">
+    • Aborts in-flight FHIR requests &amp; hides all FHIR data/controls
+  </text>
+  <text x="656" y="243" fill="#1e293b" font-size="12" font-weight="600">
+    • Accepts any plain query on a medical condition or research topic
+  </text>
+  <text x="656" y="264" fill="#1d4ed8" font-size="11.5" font-weight="700">
+    • Shows ONLY Query Window first; reveals results after query runs
+  </text>
+
+  <!-- Arrows Layer 1 -> Layer 2 -->
+  <line x1="325" y1="282" x2="325" y2="326" stroke="#0d9488" stroke-width="2.8" marker-end="url(#arrowTeal)"/>
+  <line x1="915" y1="282" x2="915" y2="326" stroke="#2563eb" stroke-width="2.8" marker-end="url(#arrowBlue)"/>
+
+  <!-- ======================================================================= -->
+  <!-- LAYER 2: AGENT 1 — CONTEXT EXTRACTION & QUERY FORMULATION               -->
+  <!-- ======================================================================= -->
+  <rect x="28" y="332" width="1184" height="172" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="28" y="332" width="1184" height="32" rx="12" fill="#e2e8f0"/>
+  <rect x="28" y="350" width="1184" height="14" fill="#e2e8f0"/>
+  <text x="48" y="353" fill="#0f172a" font-size="12.5" font-weight="800" letter-spacing="0.6">
+    LAYER 2 • AGENT 1: CLINICAL PHENOTYPE EXTRACTION &amp; SEARCH QUERY FORMULATION
+  </text>
+
+  <!-- Agent 1A -->
+  <rect x="48" y="378" width="554" height="112" rx="10" fill="#f8fafc" stroke="#0d9488" stroke-width="1.8"/>
+  <rect x="48" y="378" width="8" height="112" rx="4" fill="#0d9488"/>
+  <text x="70" y="402" fill="#0f172a" font-size="13.5" font-weight="800">
+    Agent 1A: HL7 FHIR R4 Phenotyper &amp; PICO Builder
+  </text>
+  <text x="70" y="425" fill="#334155" font-size="12">
+    • Parses Patient, Encounter, Condition (SNOMED CT / ICD-10-CM)
+  </text>
+  <text x="70" y="446" fill="#334155" font-size="12">
+    • Flags abnormal LOINC Labs/Vitals (H, HH, L, LL), RxNorm Meds &amp; Allergies
+  </text>
+  <text x="70" y="469" fill="#0f766e" font-size="11.5" font-weight="700">
+    Output: Normalized FHIR Phenotype + Subgroup Alerts + PICO Queries
+  </text>
+
+  <!-- Agent 1B -->
+  <rect x="638" y="378" width="554" height="112" rx="10" fill="#f8fafc" stroke="#2563eb" stroke-width="1.8"/>
+  <rect x="638" y="378" width="8" height="112" rx="4" fill="#2563eb"/>
+  <text x="660" y="402" fill="#0f172a" font-size="13.5" font-weight="800">
+    Agent 1B: Plain Condition &amp; Study-Design Formulator
+  </text>
+  <text x="660" y="425" fill="#334155" font-size="12">
+    • Strips conversational meta-terms ("research articles on...", "find...")
+  </text>
+  <text x="660" y="446" fill="#334155" font-size="12">
+    • Groups comparators (A vs. B) &amp; infers filter (rct | guideline | review | all)
+  </text>
+  <text x="660" y="469" fill="#1d4ed8" font-size="11.5" font-weight="700">
+    Output: Parenthesized Boolean Clauses + ClinicalTrials.gov Keywords
+  </text>
+
+  <!-- Converging Arrows Layer 2 -> Layer 3 -->
+  <path d="M 325 490 L 325 516 L 560 516 L 560 536" fill="none" stroke="#0d9488" stroke-width="2.8" marker-end="url(#arrowIndigo)"/>
+  <path d="M 915 490 L 915 516 L 680 516 L 680 536" fill="none" stroke="#2563eb" stroke-width="2.8" marker-end="url(#arrowIndigo)"/>
+
+  <!-- ======================================================================= -->
+  <!-- LAYER 3: AGENT 2 — MULTI-API RETRIEVAL & JOURNAL WHITELIST GATEKEEPER   -->
+  <!-- ======================================================================= -->
+  <rect x="28" y="540" width="1184" height="236" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="28" y="540" width="1184" height="32" rx="12" fill="#e0e7ff"/>
+  <rect x="28" y="558" width="1184" height="14" fill="#e0e7ff"/>
+  <text x="48" y="561" fill="#1e1b4b" font-size="12.5" font-weight="800" letter-spacing="0.6">
+    LAYER 3 • AGENT 2: PARALLEL OPEN BIOMEDICAL API RETRIEVAL &amp; REPUTED JOURNAL WHITELIST GATEKEEPER
+  </text>
+
+  <!-- Journal Whitelist Governance Bar (2 crisp lines) -->
+  <rect x="48" y="582" width="1144" height="48" rx="8" fill="url(#amberCard)" stroke="#d97706" stroke-width="1.6"/>
+  <text x="620" y="602" text-anchor="middle" fill="#92400e" font-size="12" font-weight="800">
+    Physician-Customizable Journal Whitelist Governance (GET / POST / DELETE /api/journals • POST /api/journals/reset)
+  </text>
+  <text x="620" y="620" text-anchor="middle" fill="#78350f" font-size="11.5" font-weight="600">
+    22 Default Tier-1 &amp; Society Flagship Journals (NEJM, The Lancet, JAMA, BMJ, Circulation, JACC, AJRCCM, Kidney Int...) + 1-Click Specialty Additions
+  </text>
+
+  <!-- 4 Open APIs Grid -->
+  <rect x="48" y="642" width="274" height="80" rx="8" fill="url(#indigoCard)" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="185" y="666" text-anchor="middle" fill="#312e81" font-size="12.5" font-weight="800">1. NCBI PubMed E-Utilities</text>
+  <text x="185" y="686" text-anchor="middle" fill="#334155" font-size="11">esearch.fcgi + efetch.fcgi XML</text>
+  <text x="185" y="705" text-anchor="middle" fill="#4338ca" font-size="11" font-weight="700">[Journal] &amp; [Publication Type]</text>
+
+  <rect x="338" y="642" width="274" height="80" rx="8" fill="url(#indigoCard)" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="475" y="666" text-anchor="middle" fill="#312e81" font-size="12.5" font-weight="800">2. Europe PMC REST API</text>
+  <text x="475" y="686" text-anchor="middle" fill="#334155" font-size="11">EMBL-EBI Core Literature</text>
+  <text x="475" y="705" text-anchor="middle" fill="#4338ca" font-size="11" font-weight="700">Open-Access PMCID &amp; Citations</text>
+
+  <rect x="628" y="642" width="274" height="80" rx="8" fill="url(#indigoCard)" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="765" y="666" text-anchor="middle" fill="#312e81" font-size="12.5" font-weight="800">3. OpenAlex Works Graph</text>
+  <text x="765" y="686" text-anchor="middle" fill="#334155" font-size="11">Scholarly Impact Index</text>
+  <text x="765" y="705" text-anchor="middle" fill="#4338ca" font-size="11" font-weight="700">Cited-By Rank &amp; OA Links</text>
+
+  <rect x="918" y="642" width="274" height="80" rx="8" fill="url(#indigoCard)" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="1055" y="666" text-anchor="middle" fill="#312e81" font-size="12.5" font-weight="800">4. ClinicalTrials.gov API v2</text>
+  <text x="1055" y="686" text-anchor="middle" fill="#334155" font-size="11">NIH Interventional Registry</text>
+  <text x="1055" y="705" text-anchor="middle" fill="#4338ca" font-size="11" font-weight="700">Active &amp; Completed NCT Trials</text>
+
+  <!-- Deduplication Footer Bar -->
+  <rect x="48" y="734" width="1144" height="30" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="620" y="754" text-anchor="middle" fill="#0f172a" font-size="11.5" font-weight="700">
+    Cross-API Canonical PMID Deduplication • Journal Title Normalization • Verified Abstract &amp; NCT Trial Payload
+  </text>
+
+  <!-- Diverging Arrows Layer 3 -> Layer 4 -->
+  <path d="M 540 776 L 540 798 L 325 798 L 325 818" fill="none" stroke="#4f46e5" stroke-width="2.8" marker-end="url(#arrowIndigo)"/>
+  <path d="M 700 776 L 700 798 L 915 798 L 915 818" fill="none" stroke="#4f46e5" stroke-width="2.8" marker-end="url(#arrowIndigo)"/>
+
+  <!-- ======================================================================= -->
+  <!-- LAYER 4: AGENTS 3 & 4 — GEMINI FLASH 3.8 STRUCTURED SYNTHESIS           -->
+  <!-- ======================================================================= -->
+  <rect x="28" y="822" width="1184" height="176" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="28" y="822" width="1184" height="32" rx="12" fill="#e2e8f0"/>
+  <rect x="28" y="840" width="1184" height="14" fill="#e2e8f0"/>
+  <text x="48" y="843" fill="#0f172a" font-size="12.5" font-weight="800" letter-spacing="0.6">
+    LAYER 4 • PARALLEL EVIDENCE REASONING &amp; SYNTHESIS (GEMINI FLASH 3.8 + PYDANTIC SCHEMA + DETERMINISTIC FALLBACK)
+  </text>
+
+  <!-- Agent 3 -->
+  <rect x="48" y="868" width="554" height="114" rx="10" fill="#f8fafc" stroke="#0f766e" stroke-width="1.8"/>
+  <rect x="48" y="868" width="8" height="114" rx="4" fill="#0f766e"/>
+  <text x="70" y="893" fill="#0f172a" font-size="13.5" font-weight="800">
+    Agent 3: Diagnostic Literature &amp; Cohort Analyzer
+  </text>
+  <text x="70" y="916" fill="#334155" font-size="12">
+    • Maps patient FHIR phenotype (Mode 1) or disease subtypes (Mode 2)
+  </text>
+  <text x="70" y="937" fill="#334155" font-size="12">
+    • Extracts published diagnostic workup criteria &amp; biomarker cutoffs
+  </text>
+  <text x="70" y="961" fill="#0f766e" font-size="11.5" font-weight="700">
+    • Enforces inline [PMID: XXXXXXXX] provenance per cohort framework
+  </text>
+
+  <!-- Agent 4 -->
+  <rect x="638" y="868" width="554" height="114" rx="10" fill="#f8fafc" stroke="#4f46e5" stroke-width="1.8"/>
+  <rect x="638" y="868" width="8" height="114" rx="4" fill="#4f46e5"/>
+  <text x="660" y="893" fill="#0f172a" font-size="13.5" font-weight="800">
+    Agent 4: Comparative Trial &amp; Safety Outcome Synthesizer
+  </text>
+  <text x="660" y="916" fill="#334155" font-size="12">
+    • Synthesizes RCT &amp; guideline outcomes (HR, 95% CI, ARR, p-values)
+  </text>
+  <text x="660" y="937" fill="#334155" font-size="12">
+    • Compiles trial exclusion criteria, washout windows &amp; monitoring kinetics
+  </text>
+  <text x="660" y="961" fill="#4338ca" font-size="11.5" font-weight="700">
+    • Validated via ClinicalSynthesisOutput Pydantic Schema (Non-Prescriptive)
+  </text>
+
+  <!-- Arrows Layer 4 -> Layer 5 -->
+  <line x1="325" y1="982" x2="325" y2="1032" stroke="#475569" stroke-width="2.8" marker-end="url(#arrowSlate)"/>
+  <line x1="915" y1="982" x2="915" y2="1032" stroke="#475569" stroke-width="2.8" marker-end="url(#arrowSlate)"/>
+
+  <!-- ======================================================================= -->
+  <!-- LAYER 5: PHYSICIAN-IN-THE-LOOP GOVERNANCE & VERIFIABLE EVIDENCE OUTPUT  -->
+  <!-- ======================================================================= -->
+  <rect x="28" y="1038" width="1184" height="142" rx="12" fill="url(#emeraldOut)" stroke="#0d9488" stroke-width="2.2" filter="url(#shadow)"/>
+  <text x="620" y="1068" text-anchor="middle" fill="#0f172a" font-size="14" font-weight="800" letter-spacing="0.4">
+    LAYER 5 • PHYSICIAN-IN-THE-LOOP NON-PRESCRIPTIVE OUTPUT &amp; REGULATORY GOVERNANCE (FDA CDS ALIGNED)
+  </text>
+  <text x="620" y="1096" text-anchor="middle" fill="#1e293b" font-size="12.5" font-weight="600">
+    Executive Literature Synthesis • Key Trial Takeaways • Cohort/Subtype Stratification • Comparative RCT Matrix • Exclusion &amp; Monitoring Notes
+  </text>
+  <text x="620" y="1123" text-anchor="middle" fill="#0f766e" font-size="12.5" font-weight="700">
+    Interactive [PMID] &amp; NCT Source Cards • Journal Filter Chips • Live 4-Agent Latency Trace • Zero Autonomous Prescriptions or Orders
+  </text>
+  <text x="620" y="1152" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="600">
+    Supports Independent Clinician Evaluation of Primary Literature (21st Century Cures Act Section 3060(a) / FD&amp;C Act Section 520(o)(1)(E))
+  </text>
+
+  <!-- Legend Footer -->
+  <text x="620" y="1210" text-anchor="middle" fill="#64748b" font-size="11.5" font-weight="600">
+    Legend: Teal Path = Mode 1 (HL7 FHIR R4 Contextualized Auto-Query)   •   Blue Path = Mode 2 (Direct Plain Condition Query Without FHIR)   •   Indigo/Amber = Shared Multi-API &amp; Journal Governance
+  </text>
+</svg>
