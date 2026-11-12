@@ -1,6 +1,7 @@
 # MedEvidenceAI • Dual-Mode HL7 FHIR R4 & Direct Plain-Query Multi-Agent Clinical Literature Copilot
 
-**Core Reasoning Engine:** Gemini Flash 3.8 (`gemini-3.8-flash`) with Structured Clinical Schema Enforcement & Deterministic Synthesis Fallback
+**Core Reasoning Engine:** Gemini Flash 3.8 (`gemini-3.8-flash`) with Structured Clinical Schema Enforcement & Deterministic Synthesis Fallback  
+**Documentation:** [Step-by-Step User Guide (`docs/USER_GUIDE.md`)](docs/USER_GUIDE.md)
 
 **MedEvidenceAI** is a physician-led, non-prescriptive **Point-of-Care Clinical Research & Literature Synthesis Copilot**. It bridges electronic health record interoperability (**HL7 FHIR R4**) with live, verifiable retrieval across **four open-source biomedical research APIs**—**NCBI PubMed Entrez E-Utilities**, **Europe PMC**, **OpenAlex**, and **NIH ClinicalTrials.gov API v2**—strictly bounded by a physician-governed whitelist of high-impact, peer-reviewed medical journals.
 
