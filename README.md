@@ -1,7 +1,9 @@
 # MedEvidenceAI • Dual-Mode HL7 FHIR R4 & Direct Plain-Query Multi-Agent Clinical Literature Copilot
 
+![MedEvidenceAI Banner](docs/medevidence_ai_banner.jpg)
+
 **Core Reasoning Engine:** Gemini Flash 3.8 (`gemini-3.8-flash`) with Structured Clinical Schema Enforcement & Deterministic Synthesis Fallback  
-**Documentation:** [Step-by-Step User Guide (`docs/USER_GUIDE.md`)](docs/USER_GUIDE.md)
+**Documentation:** [Narrated Demo Video (`docs/MedEvidenceAI_Demo_Walkthrough.mp4`)](docs/MedEvidenceAI_Demo_Walkthrough.mp4) • [Step-by-Step User Guide (`docs/USER_GUIDE.md`)](docs/USER_GUIDE.md) • [Cloud Run Guide (`docs/CLOUD_RUN_DEPLOYMENT.md`)](docs/CLOUD_RUN_DEPLOYMENT.md) • [PowerPoint Deck (`docs/MedEvidenceAI_Physician_Slides.pptx`)](docs/MedEvidenceAI_Physician_Slides.pptx) • [Interactive Physician Slides (`docs/MedEvidenceAI_Physician_Slides.html`)](docs/MedEvidenceAI_Physician_Slides.html) • [Marp Slides (`docs/PRESENTATION_SLIDES.md`)](docs/PRESENTATION_SLIDES.md)
 
 **MedEvidenceAI** is a physician-led, non-prescriptive **Point-of-Care Clinical Research & Literature Synthesis Copilot**. It bridges electronic health record interoperability (**HL7 FHIR R4**) with live, verifiable retrieval across **four open-source biomedical research APIs**—**NCBI PubMed Entrez E-Utilities**, **Europe PMC**, **OpenAlex**, and **NIH ClinicalTrials.gov API v2**—strictly bounded by a physician-governed whitelist of high-impact, peer-reviewed medical journals.
 
@@ -175,6 +177,16 @@ export GEMINI_API_KEY="your_api_key_here"
 ```
 
 Open **`http://127.0.0.1:8000/`** in your browser.
+
+### Deploy to Google Cloud Run
+
+A production [`Dockerfile`](Dockerfile), [`.dockerignore`](.dockerignore), [`.gcloudignore`](.gcloudignore), automated deployment script ([`deploy_cloudrun.sh`](deploy_cloudrun.sh)), and full step-by-step guide ([`docs/CLOUD_RUN_DEPLOYMENT.md`](docs/CLOUD_RUN_DEPLOYMENT.md)) are included:
+
+```bash
+export PROJECT_ID="my-project-ssi-364811"
+export REGION="us-central1"
+./deploy_cloudrun.sh
+```
 
 ---
 

@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 380" width="1280" height="380" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bannerBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06101d"/>
+      <stop offset="50%" stop-color="#0b2239"/>
+      <stop offset="100%" stop-color="#131c3e"/>
+    </linearGradient>
+    <linearGradient id="glowTeal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14b8a6" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#0d9488" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="glowIndigo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="glowEmerald" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#14b8a6" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="brandCrossGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <marker id="flowArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#2dd4bf"/>
+    </marker>
+    <filter id="cardGlow" x="-8%" y="-8%" width="116%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="1280" height="380" rx="22" fill="url(#bannerBg)"/>
+  <circle cx="190" cy="70" r="180" fill="#14b8a6" opacity="0.06"/>
+  <circle cx="1090" cy="310" r="210" fill="#6366f1" opacity="0.08"/>
+
+  <!-- Minimal Header Brand -->
+  <g transform="translate(455, 28)">
+    <rect x="0" y="0" width="42" height="42" rx="11" fill="url(#brandCrossGrad)"/>
+    <path d="M21 10v22M10 21h22" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+    <text x="56" y="30" fill="#ffffff" font-size="30" font-weight="900" letter-spacing="-0.4">MedEvidenceAI</text>
+  </g>
+  <text x="640" y="92" text-anchor="middle" fill="#94a3b8" font-size="14.5" font-weight="600" letter-spacing="0.8">
+    POINT-OF-CARE CLINICAL LITERATURE COPILOT
+  </text>
+
+  <!-- ===================================================================== -->
+  <!-- STEP 1: DUAL INPUT                                                    -->
+  <!-- ===================================================================== -->
+  <g transform="translate(56, 126)" filter="url(#cardGlow)">
+    <rect width="245" height="196" rx="16" fill="url(#glowTeal)" stroke="#14b8a6" stroke-width="1.8"/>
+    <!-- EHR + Search Icon -->
+    <circle cx="122" cy="54" r="28" fill="#0f293d" stroke="#2dd4bf" stroke-width="1.8"/>
+    <path d="M111 46h22M111 54h16M111 62h20" stroke="#5eead4" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="122" y="108" text-anchor="middle" fill="#ffffff" font-size="17" font-weight="800">Dual Input</text>
+    <rect x="26" y="124" width="193" height="24" rx="12" fill="#0b2236" stroke="#14b8a6" stroke-width="1"/>
+    <text x="122" y="140" text-anchor="middle" fill="#5eead4" font-size="12" font-weight="700">HL7 FHIR R4 Chart</text>
+    <rect x="26" y="156" width="193" height="24" rx="12" fill="#0b2236" stroke="#38bdf8" stroke-width="1"/>
+    <text x="122" y="172" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="700">Direct Plain Query</text>
+  </g>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="313" y1="224" x2="355" y2="224" stroke="#2dd4bf" stroke-width="3" stroke-dasharray="5,4" marker-end="url(#flowArrow)"/>
+
+  <!-- ===================================================================== -->
+  <!-- STEP 2: 4 OPEN APIS & 22 JOURNALS                                     -->
+  <!-- ===================================================================== -->
+  <g transform="translate(368, 126)" filter="url(#cardGlow)">
+    <rect width="250" height="196" rx="16" fill="url(#glowIndigo)" stroke="#6366f1" stroke-width="1.8"/>
+    <circle cx="125" cy="54" r="28" fill="#161f42" stroke="#818cf8" stroke-width="1.8"/>
+    <path d="M112 48l13-7 13 7-13 7-13-7zM112 56l13 7 13-7M112 63l13 7 13-7" fill="none" stroke="#a5b4fc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="125" y="108" text-anchor="middle" fill="#ffffff" font-size="17" font-weight="800">Trusted Sources</text>
+    <rect x="24" y="124" width="202" height="24" rx="12" fill="#121a38" stroke="#818cf8" stroke-width="1"/>
+    <text x="125" y="140" text-anchor="middle" fill="#c7d2fe" font-size="12" font-weight="700">22 Flagship Journals</text>
+    <rect x="24" y="156" width="202" height="24" rx="12" fill="#121a38" stroke="#f59e0b" stroke-width="1"/>
+    <text x="125" y="172" text-anchor="middle" fill="#fde68a" font-size="12" font-weight="700">PubMed • EPMC • OpenAlex • CT.gov</text>
+  </g>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="630" y1="224" x2="672" y2="224" stroke="#2dd4bf" stroke-width="3" stroke-dasharray="5,4" marker-end="url(#flowArrow)"/>
+
+  <!-- ===================================================================== -->
+  <!-- STEP 3: 4-AGENT GEMINI ENGINE                                         -->
+  <!-- ===================================================================== -->
+  <g transform="translate(685, 126)" filter="url(#cardGlow)">
+    <rect width="245" height="196" rx="16" fill="url(#glowIndigo)" stroke="#818cf8" stroke-width="1.8"/>
+    <circle cx="122" cy="54" r="28" fill="#161f42" stroke="#c084fc" stroke-width="1.8"/>
+    <circle cx="122" cy="54" r="7" fill="#e9d5ff"/>
+    <circle cx="106" cy="43" r="3.5" fill="#818cf8"/>
+    <circle cx="138" cy="43" r="3.5" fill="#818cf8"/>
+    <circle cx="106" cy="65" r="3.5" fill="#2dd4bf"/>
+    <circle cx="138" cy="65" r="3.5" fill="#2dd4bf"/>
+    <text x="122" y="108" text-anchor="middle" fill="#ffffff" font-size="17" font-weight="800">4-Agent Engine</text>
+    <rect x="26" y="124" width="193" height="24" rx="12" fill="#121a38" stroke="#c084fc" stroke-width="1"/>
+    <text x="122" y="140" text-anchor="middle" fill="#e9d5ff" font-size="12" font-weight="700">Gemini Flash 3.8</text>
+    <rect x="26" y="156" width="193" height="24" rx="12" fill="#121a38" stroke="#38bdf8" stroke-width="1"/>
+    <text x="122" y="172" text-anchor="middle" fill="#bae6fd" font-size="12" font-weight="700">Schema &amp; Safety Guard</text>
+  </g>
+
+  <!-- Arrow 3 -> 4 -->
+  <line x1="942" y1="224" x2="984" y2="224" stroke="#2dd4bf" stroke-width="3" stroke-dasharray="5,4" marker-end="url(#flowArrow)"/>
+
+  <!-- ===================================================================== -->
+  <!-- STEP 4: VERIFIED PHYSICIAN OUTPUT                                     -->
+  <!-- ===================================================================== -->
+  <g transform="translate(997, 126)" filter="url(#cardGlow)">
+    <rect width="227" height="196" rx="16" fill="url(#glowEmerald)" stroke="#10b981" stroke-width="1.8"/>
+    <circle cx="113" cy="54" r="28" fill="#0c2924" stroke="#34d399" stroke-width="1.8"/>
+    <path d="M102 54l8 8 15-16" fill="none" stroke="#6ee7b7" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="113" y="108" text-anchor="middle" fill="#ffffff" font-size="17" font-weight="800">Verified Brief</text>
+    <rect x="20" y="124" width="187" height="24" rx="12" fill="#09221d" stroke="#10b981" stroke-width="1"/>
+    <text x="113" y="140" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="700">Clickable PMID &amp; NCT</text>
+    <rect x="20" y="156" width="187" height="24" rx="12" fill="#09221d" stroke="#2dd4bf" stroke-width="1"/>
+    <text x="113" y="172" text-anchor="middle" fill="#99f6e4" font-size="12" font-weight="700">Non-Prescriptive CDS</text>
+  </g>
+
+  <!-- Minimal Bottom Tagline -->
+  <text x="640" y="356" text-anchor="middle" fill="#64748b" font-size="12" font-weight="700" letter-spacing="1.2">
+    ZERO HALLUCINATED CITATIONS  •  PHYSICIAN-IN-THE-LOOP  •  GOOGLE CLOUD RUN
+  </text>
+</svg>

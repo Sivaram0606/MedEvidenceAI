@@ -213,7 +213,7 @@ curl -s -X POST http://127.0.0.1:8000/api/general-question \
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/synthesize \
   -H "Content-Type: application/json" \
-  -d '{"case_id": "case_hfref_ckd"}' | python3 -m json.tool
+  -d '{"case_id": "patient-cardio-ckd"}' | python3 -m json.tool
 ```
 
 ---

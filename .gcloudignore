@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.env
+.env.*
+.DS_Store
+uvicorn.log
+tests/
+docs/
+README.md
+deploy_cloudrun.sh

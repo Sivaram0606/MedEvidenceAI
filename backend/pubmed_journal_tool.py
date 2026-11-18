@@ -6,10 +6,30 @@ European Heart Journal, AJRCCM, Intensive Care Medicine, Kidney International, e
 via live NCBI PubMed Entrez E-Utilities API (`esearch` + `efetch`) plus verified landmark trial index.
 """
 
+import asyncio
+from collections import OrderedDict
+import copy
+from datetime import date
+import logging
+import os
 import re
+import time
 import xml.etree.ElementTree as ET
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import httpx
+
+try:
+    import defusedxml.ElementTree as SafeET  # type: ignore
+except ImportError:
+    SafeET = ET
+
+logger = logging.getLogger(__name__)
+
+MAX_PUBMED_XML_BYTES = 2 * 1024 * 1024
+MAX_JOURNAL_SESSIONS = 512
+RETRIEVAL_CACHE_TTL_SEC = 900.0
+RETRIEVAL_CACHE_MAX_ENTRIES = 128
+_RETRIEVAL_CACHE: "OrderedDict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]]" = OrderedDict()
 
 # Default Curated Whitelist of 22 Reputed High-Impact Medical Journals
 DEFAULT_MEDICAL_JOURNALS: List[Dict[str, str]] = [
@@ -51,9 +71,38 @@ SUGGESTED_EXTRA_JOURNALS: List[Dict[str, str]] = [
     {"id": "eur-respir-j", "name": "European Respiratory Journal", "abbrev": "Eur Respir J", "short": "Eur Respir J (ERS)", "category": "Pulmonology", "impact_tier": "Specialty Flagship"},
 ]
 
-# Mutable Active Journal List (kept in-place so REPUTED_MEDICAL_JOURNALS stays synced)
-ACTIVE_MEDICAL_JOURNALS: List[Dict[str, str]] = [dict(j) for j in DEFAULT_MEDICAL_JOURNALS]
-REPUTED_MEDICAL_JOURNALS: List[Dict[str, str]] = ACTIVE_MEDICAL_JOURNALS
+# Default Journal List & Session-Isolated Whitelist Store
+ACTIVE_MEDICAL_JOURNALS: List[Dict[str, Any]] = [dict(j) for j in DEFAULT_MEDICAL_JOURNALS]
+REPUTED_MEDICAL_JOURNALS: List[Dict[str, Any]] = ACTIVE_MEDICAL_JOURNALS
+_SESSION_JOURNAL_STORE: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
+
+
+def _get_session_journal_list(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Returns an isolated mutable journal list per client session (or default list if unset)."""
+    if not session_id or session_id == "default":
+        return ACTIVE_MEDICAL_JOURNALS
+    if session_id in _SESSION_JOURNAL_STORE:
+        _SESSION_JOURNAL_STORE.move_to_end(session_id)
+        return _SESSION_JOURNAL_STORE[session_id]
+    while len(_SESSION_JOURNAL_STORE) >= MAX_JOURNAL_SESSIONS:
+        _SESSION_JOURNAL_STORE.popitem(last=False)
+    fresh = [dict(j) for j in DEFAULT_MEDICAL_JOURNALS]
+    _SESSION_JOURNAL_STORE[session_id] = fresh
+    return fresh
+
+
+def _sanitize_journal_term(text: Optional[str], max_len: int = 140) -> str:
+    """
+    Sanitizes journal names and abbreviations so quotes, brackets, or Boolean operators
+    cannot break out of PubMed `"..."[Journal]` or Europe PMC `JOURNAL:"..."` clauses.
+    """
+    if not text:
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f\"\[\]{};<>\\]+", " ", str(text))
+    cleaned = " ".join(cleaned.split()).strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].strip()
+    return cleaned
 
 
 def _slugify_journal_id(text: str) -> str:
@@ -74,13 +123,13 @@ def _normalize_journal_key(text: str) -> str:
     return cleaned
 
 
-def build_pubmed_journal_filter_clause(journals: List[Dict[str, str]]) -> str:
+def build_pubmed_journal_filter_clause(journals: List[Dict[str, Any]]) -> str:
     if not journals:
         return ""
     clauses: List[str] = []
-    for j in journals:
-        abbrev = j.get("abbrev", "").strip()
-        name = j.get("name", "").strip()
+    for j in journals[:60]:
+        abbrev = _sanitize_journal_term(j.get("abbrev", ""))
+        name = _sanitize_journal_term(j.get("name", ""))
         if j.get("is_custom") and name and abbrev and name.lower() != abbrev.lower():
             clauses.append(f'"{abbrev}"[Journal] OR "{name}"[Journal]')
         elif abbrev:
@@ -93,8 +142,8 @@ def build_pubmed_journal_filter_clause(journals: List[Dict[str, str]]) -> str:
 PUBMED_JOURNAL_FILTER_CLAUSE = build_pubmed_journal_filter_clause(ACTIVE_MEDICAL_JOURNALS)
 
 
-def get_active_journals() -> List[Dict[str, str]]:
-    return [dict(j) for j in ACTIVE_MEDICAL_JOURNALS]
+def get_active_journals(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    return [dict(j) for j in _get_session_journal_list(session_id)]
 
 
 def add_journal(
@@ -102,17 +151,26 @@ def add_journal(
     abbrev: Optional[str] = None,
     short: Optional[str] = None,
     category: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Adds a journal to ACTIVE_MEDICAL_JOURNALS (matching known metadata if recognized)."""
-    clean_name = (name or "").strip()
-    if not clean_name:
-        raise ValueError("Journal name cannot be empty.")
+    """Adds a journal to the active whitelist (matching known metadata if recognized)."""
+    clean_name = _sanitize_journal_term(name, 140)
+    if not clean_name or not re.search(r"[A-Za-z]{2,}", clean_name):
+        raise ValueError("Journal name must contain valid alphabetic characters.")
+
+    clean_abbrev_in = _sanitize_journal_term(abbrev, 80) if abbrev else ""
+    clean_short_in = _sanitize_journal_term(short, 40) if short else ""
+    clean_cat_in = _sanitize_journal_term(category, 60) if category else ""
+
+    target_list = _get_session_journal_list(session_id)
+    if len(target_list) >= 60:
+        raise ValueError("Maximum of 60 active journals reached.")
 
     norm_input = _normalize_journal_key(clean_name)
-    norm_abbrev = _normalize_journal_key(abbrev or "")
+    norm_abbrev = _normalize_journal_key(clean_abbrev_in)
 
     # Return existing if already active
-    for existing in ACTIVE_MEDICAL_JOURNALS:
+    for existing in target_list:
         if (
             existing["id"] == _slugify_journal_id(clean_name)
             or _normalize_journal_key(existing["name"]) == norm_input
@@ -120,7 +178,11 @@ def add_journal(
             or _normalize_journal_key(existing["short"]) == norm_input
             or (norm_abbrev and _normalize_journal_key(existing["abbrev"]) == norm_abbrev)
         ):
-            return {"journal": dict(existing), "already_exists": True, "journals": get_active_journals()}
+            return {
+                "journal": dict(existing),
+                "already_exists": True,
+                "journals": get_active_journals(session_id),
+            }
 
     # Check if input matches a known default or suggested specialty journal
     known_catalog = DEFAULT_MEDICAL_JOURNALS + SUGGESTED_EXTRA_JOURNALS
@@ -133,16 +195,20 @@ def add_journal(
             or preset["short"].lower() == clean_name.lower()
         ):
             entry = dict(preset)
-            if category and category.strip():
-                entry["category"] = category.strip()
-            ACTIVE_MEDICAL_JOURNALS.append(entry)
-            return {"journal": dict(entry), "already_exists": False, "journals": get_active_journals()}
+            if clean_cat_in:
+                entry["category"] = clean_cat_in
+            target_list.append(entry)
+            return {
+                "journal": dict(entry),
+                "already_exists": False,
+                "journals": get_active_journals(session_id),
+            }
 
-    eff_abbrev = (abbrev or "").strip() or clean_name
-    eff_short = (short or "").strip() or (eff_abbrev if len(eff_abbrev) <= 24 else eff_abbrev[:22] + "…")
-    eff_category = (category or "").strip() or "Custom / Specialty"
+    eff_abbrev = clean_abbrev_in or clean_name
+    eff_short = clean_short_in or (eff_abbrev if len(eff_abbrev) <= 24 else eff_abbrev[:22] + "…")
+    eff_category = clean_cat_in or "Custom / Specialty"
     base_id = _slugify_journal_id(eff_short if len(eff_short) >= 3 else clean_name)
-    existing_ids = {j["id"] for j in ACTIVE_MEDICAL_JOURNALS}
+    existing_ids = {j["id"] for j in target_list}
     unique_id = base_id
     idx = 2
     while unique_id in existing_ids:
@@ -158,16 +224,21 @@ def add_journal(
         "impact_tier": "Physician Added",
         "is_custom": True,
     }
-    ACTIVE_MEDICAL_JOURNALS.append(new_entry)
-    return {"journal": dict(new_entry), "already_exists": False, "journals": get_active_journals()}
+    target_list.append(new_entry)
+    return {
+        "journal": dict(new_entry),
+        "already_exists": False,
+        "journals": get_active_journals(session_id),
+    }
 
 
-def remove_journal(journal_id: str) -> List[Dict[str, str]]:
+def remove_journal(journal_id: str, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Removes a journal by its slug ID, short name, or abbreviation."""
     target = (journal_id or "").strip().lower()
     target_norm = _normalize_journal_key(target)
+    target_list = _get_session_journal_list(session_id)
     kept = [
-        j for j in ACTIVE_MEDICAL_JOURNALS
+        j for j in target_list
         if not (
             j["id"].lower() == target
             or j["short"].lower() == target
@@ -175,16 +246,17 @@ def remove_journal(journal_id: str) -> List[Dict[str, str]]:
             or _normalize_journal_key(j["name"]) == target_norm
         )
     ]
-    ACTIVE_MEDICAL_JOURNALS.clear()
-    ACTIVE_MEDICAL_JOURNALS.extend(kept)
-    return get_active_journals()
+    target_list.clear()
+    target_list.extend(kept)
+    return get_active_journals(session_id)
 
 
-def reset_journals() -> List[Dict[str, str]]:
+def reset_journals(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Restores the default 22 whitelisted medical journals."""
-    ACTIVE_MEDICAL_JOURNALS.clear()
-    ACTIVE_MEDICAL_JOURNALS.extend(dict(j) for j in DEFAULT_MEDICAL_JOURNALS)
-    return get_active_journals()
+    target_list = _get_session_journal_list(session_id)
+    target_list.clear()
+    target_list.extend(dict(j) for j in DEFAULT_MEDICAL_JOURNALS)
+    return get_active_journals(session_id)
 
 
 # Verified Landmark Clinical Trials & Official Practice Guidelines (Authentic PMIDs & DOIs)
@@ -466,12 +538,28 @@ OPEN_SOURCE_RESEARCH_APIS: List[Dict[str, str]] = [
 ]
 
 
+def _safe_https_doi_url(raw_doi_or_url: Optional[str], fallback_url: str) -> str:
+    """Ensures external DOI links strictly use HTTPS."""
+    val = (raw_doi_or_url or "").strip()
+    if not val:
+        return fallback_url
+    if val.startswith("https://"):
+        return val
+    if val.startswith("http://doi.org/"):
+        return "https://" + val[len("http://"):]
+    if val.startswith("10.") and " " not in val and "<" not in val and '"' not in val:
+        return f"https://doi.org/{val}"
+    return fallback_url
+
+
 async def search_pubmed_reputed_journals(
     clinical_queries: List[str],
     max_results_per_query: int = 4,
     condition_keywords: Optional[str] = None,
     pub_type_filter: Optional[str] = None,
     custom_journals: Optional[List[Dict[str, Any]]] = None,
+    http_client: Optional[httpx.AsyncClient] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Concurrently queries multiple open-source biomedical research APIs:
@@ -480,14 +568,34 @@ async def search_pubmed_reputed_journals(
       3. OpenAlex Scholarly API (latest high-impact works & citation metrics)
       4. ClinicalTrials.gov API v2 (active/recent interventional trials matching the condition)
     """
-    import asyncio
-
     journals_to_use: List[Dict[str, Any]] = (
-        [dict(j) for j in custom_journals]
+        [dict(j) for j in custom_journals[:60] if isinstance(j, dict)]
         if custom_journals is not None
-        else get_active_journals()
+        else get_active_journals(session_id)
     )
+    pub_filter_norm = (pub_type_filter or "all").lower().strip()
+    journal_sig = tuple(sorted(_normalize_journal_key(j.get("abbrev") or j.get("name", "")) for j in journals_to_use))
+    cache_key = (
+        tuple(q.strip() for q in clinical_queries[:3]),
+        (condition_keywords or "").strip().lower(),
+        pub_filter_norm,
+        max_results_per_query,
+        journal_sig,
+    )
+
+    now_mono = time.monotonic()
+    cached_entry = _RETRIEVAL_CACHE.get(cache_key)
+    if cached_entry is not None:
+        ts, cached_payload = cached_entry
+        if now_mono - ts <= RETRIEVAL_CACHE_TTL_SEC:
+            _RETRIEVAL_CACHE.move_to_end(cache_key)
+            cloned = copy.deepcopy(cached_payload)
+            cloned["cache_hit"] = True
+            return cloned
+        _RETRIEVAL_CACHE.pop(cache_key, None)
+
     dynamic_pubmed_clause = build_pubmed_journal_filter_clause(journals_to_use)
+    ncbi_api_key = os.environ.get("NCBI_API_KEY", "").strip()
 
     live_articles: Dict[str, Dict[str, Any]] = {}
     clinical_trials: List[Dict[str, Any]] = []
@@ -499,7 +607,6 @@ async def search_pubmed_reputed_journals(
         "ClinicalTrials.gov v2": "queried",
     }
 
-    pub_filter_norm = (pub_type_filter or "all").lower().strip()
     pubmed_pt_clause = ""
     if pub_filter_norm == "rct":
         pubmed_pt_clause = ' AND ("Randomized Controlled Trial"[Publication Type] OR randomized[Title/Abstract])'
@@ -508,42 +615,81 @@ async def search_pubmed_reputed_journals(
     elif pub_filter_norm == "review":
         pubmed_pt_clause = ' AND ("Meta-Analysis"[Publication Type] OR "Systematic Review"[Publication Type] OR "meta-analysis"[Title] OR "systematic review"[Title])'
 
-    async def _run_pubmed_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
+    pubmed_sem = asyncio.Semaphore(5 if ncbi_api_key else 2)
+
+    async def _run_pubmed_esearch(client: httpx.AsyncClient, raw_q: str) -> List[str]:
         if not dynamic_pubmed_clause:
             return []
         strict_query = f"({raw_q}){pubmed_pt_clause} AND {dynamic_pubmed_clause}"
         executed_pubmed_queries.append(strict_query)
+        params: Dict[str, str] = {
+            "db": "pubmed",
+            "term": strict_query,
+            "retmode": "json",
+            "retmax": str(max_results_per_query),
+            "sort": "relevance",
+        }
+        if ncbi_api_key:
+            params["api_key"] = ncbi_api_key
         try:
-            esearch_resp = await client.get(
-                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
-                params={
-                    "db": "pubmed",
-                    "term": strict_query,
-                    "retmode": "json",
-                    "retmax": str(max_results_per_query),
-                    "sort": "relevance",
-                },
-            )
+            async with pubmed_sem:
+                esearch_resp = await client.get(
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+                    params=params,
+                )
             if esearch_resp.status_code != 200:
+                api_status_map["NCBI PubMed E-Utilities"] = f"HTTP {esearch_resp.status_code}"
                 return []
-            pmids = esearch_resp.json().get("esearchresult", {}).get("idlist", [])
-            if not pmids:
-                api_status_map["NCBI PubMed E-Utilities"] = "200 OK (Live)"
-                return []
+            api_status_map["NCBI PubMed E-Utilities"] = "200 OK (Live)"
+            return [
+                str(p)
+                for p in (esearch_resp.json().get("esearchresult", {}).get("idlist") or [])
+                if str(p).isdigit()
+            ]
+        except Exception as exc:
+            logger.warning("PubMed esearch failed: %s", exc)
+            api_status_map["NCBI PubMed E-Utilities"] = "degraded (timeout/network)"
+            return []
 
-            efetch_resp = await client.get(
-                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-                params={
-                    "db": "pubmed",
-                    "id": ",".join(pmids),
-                    "retmode": "xml",
-                },
-            )
+    async def _run_pubmed_batched(client: httpx.AsyncClient, queries_to_run: List[str]) -> List[Dict[str, Any]]:
+        """Runs PubMed esearch across queries, deduplicates PMIDs, and performs ONE batched efetch."""
+        if not dynamic_pubmed_clause or not queries_to_run:
+            return []
+        esearch_lists = await asyncio.gather(
+            *(_run_pubmed_esearch(client, q) for q in queries_to_run[:2]),
+            return_exceptions=True,
+        )
+        deduped_pmids: List[str] = []
+        seen_id = set()
+        for res in esearch_lists:
+            if isinstance(res, list):
+                for pmid in res:
+                    if pmid not in seen_id:
+                        seen_id.add(pmid)
+                        deduped_pmids.append(pmid)
+        if not deduped_pmids:
+            return []
+
+        efetch_params: Dict[str, str] = {
+            "db": "pubmed",
+            "id": ",".join(deduped_pmids[:16]),
+            "retmode": "xml",
+        }
+        if ncbi_api_key:
+            efetch_params["api_key"] = ncbi_api_key
+        try:
+            async with pubmed_sem:
+                efetch_resp = await client.get(
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                    params=efetch_params,
+                )
             if efetch_resp.status_code == 200:
                 api_status_map["NCBI PubMed E-Utilities"] = "200 OK (Live)"
                 return _parse_pubmed_xml(efetch_resp.text, journals_to_use)
-        except Exception:
-            pass
+            api_status_map["NCBI PubMed E-Utilities"] = f"HTTP {efetch_resp.status_code}"
+        except Exception as exc:
+            logger.warning("PubMed batched efetch failed: %s", exc)
+            api_status_map["NCBI PubMed E-Utilities"] = "degraded (efetch timeout)"
         return []
 
     async def _run_europe_pmc_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
@@ -551,7 +697,13 @@ async def search_pubmed_reputed_journals(
             return []
         # Include up to 14 active journals (prioritizing custom-added journals + flagship journals)
         prioritized = sorted(journals_to_use, key=lambda item: (0 if item.get("is_custom") else 1))[:14]
-        epmc_parts = [f'JOURNAL:"{j.get("abbrev") or j.get("name")}"' for j in prioritized]
+        epmc_parts = [
+            f'JOURNAL:"{_sanitize_journal_term(j.get("abbrev") or j.get("name"))}"'
+            for j in prioritized
+            if _sanitize_journal_term(j.get("abbrev") or j.get("name"))
+        ]
+        if not epmc_parts:
+            return []
         epmc_journal_clause = "(" + " OR ".join(epmc_parts) + ")"
         epmc_pt_clause = ""
         if pub_filter_norm == "rct":
@@ -560,7 +712,8 @@ async def search_pubmed_reputed_journals(
             epmc_pt_clause = " AND (guideline)"
         elif pub_filter_norm == "review":
             epmc_pt_clause = ' AND ("meta-analysis" OR "systematic review")'
-        q_str = f"({raw_q}){epmc_pt_clause} AND {epmc_journal_clause} AND (FIRST_PDATE:[2020-01-01 TO 2026-12-31])"
+        upper_year = max(date.today().year, 2026)
+        q_str = f"({raw_q}){epmc_pt_clause} AND {epmc_journal_clause} AND (FIRST_PDATE:[2020-01-01 TO {upper_year}-12-31])"
         try:
             resp = await client.get(
                 "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
@@ -573,12 +726,13 @@ async def search_pubmed_reputed_journals(
                 },
             )
             if resp.status_code != 200:
+                api_status_map["Europe PMC (EMBL-EBI)"] = f"HTTP {resp.status_code}"
                 return []
             api_status_map["Europe PMC (EMBL-EBI)"] = "200 OK (Live)"
             items = resp.json().get("resultList", {}).get("result", [])
             parsed_epmc: List[Dict[str, Any]] = []
             for it in items:
-                pmid = it.get("pmid")
+                pmid_raw = str(it.get("pmid") or "").strip()
                 j_obj = it.get("journalInfo", {}).get("journal", {}) or {}
                 j_title = j_obj.get("title") or it.get("journalTitle", "")
                 j_medline = j_obj.get("medlineAbbreviation") or j_obj.get("isoAbbreviation") or ""
@@ -586,15 +740,16 @@ async def search_pubmed_reputed_journals(
                     _match_journal_metadata(j_title, journals_to_use)
                     or _match_journal_metadata(j_medline, journals_to_use)
                 )
-                if not pmid or not matched_j:
+                if not pmid_raw.isdigit() or not matched_j:
                     continue
                 abs_text = it.get("abstractText", "")
                 if len(abs_text) > 650:
                     abs_text = abs_text[:647] + "..."
                 cited_by = it.get("citedByCount", 0)
-                doi = it.get("doi", "")
+                doi = str(it.get("doi") or "").strip()
+                fallback_epmc_url = f"https://europepmc.org/article/MED/{pmid_raw}"
                 parsed_epmc.append({
-                    "pmid": str(pmid),
+                    "pmid": pmid_raw,
                     "doi": doi,
                     "title": (it.get("title") or "").rstrip("."),
                     "journal": matched_j["name"],
@@ -604,12 +759,14 @@ async def search_pubmed_reputed_journals(
                     "pub_type": f"Peer-Reviewed • Cited by {cited_by}",
                     "evidence_level": f"Europe PMC Verified ({cited_by} Citations)",
                     "abstract_summary": abs_text or "Open-access biomedical research record retrieved via Europe PMC REST API.",
-                    "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                    "doi_url": f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/MED/{pmid}",
+                    "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid_raw}/",
+                    "doi_url": _safe_https_doi_url(doi, fallback_epmc_url),
                     "source_verification": "Europe PMC Open API + PubMed",
                 })
             return parsed_epmc
-        except Exception:
+        except Exception as exc:
+            logger.warning("Europe PMC query failed: %s", exc)
+            api_status_map["Europe PMC (EMBL-EBI)"] = "degraded (timeout/network)"
             return []
 
     async def _run_clinical_trials_query(client: httpx.AsyncClient, cond_q: str) -> List[Dict[str, Any]]:
@@ -623,6 +780,7 @@ async def search_pubmed_reputed_journals(
                 },
             )
             if resp.status_code != 200:
+                api_status_map["ClinicalTrials.gov v2"] = f"HTTP {resp.status_code}"
                 return []
             api_status_map["ClinicalTrials.gov v2"] = "200 OK (Live)"
             studies = resp.json().get("studies", [])
@@ -635,8 +793,8 @@ async def search_pubmed_reputed_journals(
                 cond_mod = p.get("conditionsModule", {})
                 arms_mod = p.get("armsInterventionsModule", {})
 
-                nct_id = ident.get("nctId", "")
-                if not nct_id:
+                nct_id = str(ident.get("nctId") or "").strip()
+                if not re.fullmatch(r"NCT\d{6,10}", nct_id):
                     continue
                 interventions = [
                     iv.get("name", "")
@@ -654,7 +812,9 @@ async def search_pubmed_reputed_journals(
                     "url": f"https://clinicaltrials.gov/study/{nct_id}",
                 })
             return out_trials
-        except Exception:
+        except Exception as exc:
+            logger.warning("ClinicalTrials.gov v2 query failed: %s", exc)
+            api_status_map["ClinicalTrials.gov v2"] = "degraded (timeout/network)"
             return []
 
     async def _run_openalex_query(client: httpx.AsyncClient, raw_q: str) -> List[Dict[str, Any]]:
@@ -679,6 +839,7 @@ async def search_pubmed_reputed_journals(
                 },
             )
             if resp.status_code != 200:
+                api_status_map["OpenAlex Research Graph"] = f"HTTP {resp.status_code}"
                 return []
             api_status_map["OpenAlex Research Graph"] = "200 OK (Live)"
             works = resp.json().get("results", [])
@@ -691,10 +852,10 @@ async def search_pubmed_reputed_journals(
                 src = loc.get("source") or {}
                 j_name = src.get("display_name", "")
                 matched_j = _match_journal_metadata(j_name, journals_to_use)
-                if not pmid or not matched_j:
+                if not pmid.isdigit() or not matched_j:
                     continue
-                doi_url = w.get("doi") or ""
-                doi = doi_url.replace("https://doi.org/", "") if doi_url else ""
+                doi_url_raw = str(w.get("doi") or "").strip()
+                doi = doi_url_raw.replace("https://doi.org/", "").replace("http://doi.org/", "") if doi_url_raw else ""
                 cited_by = w.get("cited_by_count", 0)
                 auths = [
                     a.get("author", {}).get("display_name", "")
@@ -702,8 +863,9 @@ async def search_pubmed_reputed_journals(
                     if a.get("author", {}).get("display_name")
                 ]
                 authors_str = ", ".join(auths) + (", et al." if len(auths) >= 3 else "")
+                pubmed_fallback = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                 parsed_oa.append({
-                    "pmid": str(pmid),
+                    "pmid": pmid,
                     "doi": doi,
                     "title": w.get("display_name") or w.get("title") or "Medical Research Article",
                     "journal": matched_j["name"],
@@ -716,43 +878,44 @@ async def search_pubmed_reputed_journals(
                         f"High-impact peer-reviewed study published in {matched_j['name']} "
                         f"({w.get('publication_year')}), cited {cited_by} times in global biomedical literature (OpenAlex & PubMed indexed)."
                     ),
-                    "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                    "doi_url": doi_url or f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                    "pubmed_url": pubmed_fallback,
+                    "doi_url": _safe_https_doi_url(doi_url_raw or doi, pubmed_fallback),
                     "source_verification": "OpenAlex + PubMed Verified",
                 })
             return parsed_oa
-        except Exception:
+        except Exception as exc:
+            logger.warning("OpenAlex query failed: %s", exc)
+            api_status_map["OpenAlex Research Graph"] = "degraded (timeout/network)"
             return []
 
     primary_q = clinical_queries[0] if clinical_queries else "clinical practice guideline"
     ct_query = condition_keywords or primary_q[:60]
 
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            tasks = [
-                _run_pubmed_query(client, primary_q),
-                _run_europe_pmc_query(client, primary_q),
-                _run_openalex_query(client, primary_q),
-                _run_clinical_trials_query(client, ct_query),
-            ]
-            if len(clinical_queries) > 1:
-                tasks.append(_run_pubmed_query(client, clinical_queries[1]))
-
-            results_list = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for idx in (0, 1, 2):
-                if isinstance(results_list[idx], list):
-                    for item in results_list[idx]:
-                        if item["pmid"] not in live_articles:
-                            live_articles[item["pmid"]] = item
-            if isinstance(results_list[3], list):
-                clinical_trials = results_list[3]
-            if len(results_list) > 4 and isinstance(results_list[4], list):
-                for item in results_list[4]:
+    async def _execute_with_client(active_client: httpx.AsyncClient) -> None:
+        nonlocal clinical_trials
+        results_list = await asyncio.gather(
+            _run_pubmed_batched(active_client, clinical_queries[:2] or [primary_q]),
+            _run_europe_pmc_query(active_client, primary_q),
+            _run_openalex_query(active_client, primary_q),
+            _run_clinical_trials_query(active_client, ct_query),
+            return_exceptions=True,
+        )
+        for idx in (0, 1, 2):
+            if isinstance(results_list[idx], list):
+                for item in results_list[idx]:
                     if item["pmid"] not in live_articles:
                         live_articles[item["pmid"]] = item
-    except Exception:
-        pass
+        if isinstance(results_list[3], list):
+            clinical_trials = results_list[3]
+
+    try:
+        if http_client is not None:
+            await _execute_with_client(http_client)
+        else:
+            async with httpx.AsyncClient(timeout=8.0) as temp_client:
+                await _execute_with_client(temp_client)
+    except Exception as exc:
+        logger.warning("Multi-API retrieval orchestration error: %s", exc)
 
     # Match verified landmark clinical trials & guidelines relevant to the queries AND active journals
     combined_query_text = " ".join(clinical_queries).lower()
@@ -787,12 +950,13 @@ async def search_pubmed_reputed_journals(
         pmid = art["pmid"]
         if pmid not in seen_pmids:
             seen_pmids.add(pmid)
+            pubmed_fallback = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             final_articles.append({
                 **art,
                 "journal": matched_landmark_j["name"],
                 "journal_short": matched_landmark_j["short"],
-                "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                "doi_url": f"https://doi.org/{art['doi']}" if art.get("doi") else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "pubmed_url": pubmed_fallback,
+                "doi_url": _safe_https_doi_url(art.get("doi"), pubmed_fallback),
                 "source_verification": "PubMed & Landmark Trial Registry",
             })
 
@@ -823,7 +987,7 @@ async def search_pubmed_reputed_journals(
         key=lambda item: (-item["count"], item["short"]),
     )
 
-    return {
+    result_payload: Dict[str, Any] = {
         "articles": capped_articles,
         "clinical_trials": clinical_trials,
         "open_source_apis": OPEN_SOURCE_RESEARCH_APIS,
@@ -833,21 +997,40 @@ async def search_pubmed_reputed_journals(
         "matched_journals": matched_journals,
         "whitelisted_journals_count": len(journals_to_use),
         "live_articles_retrieved": len(live_articles),
+        "cache_hit": False,
     }
+
+    if live_articles or clinical_trials:
+        while len(_RETRIEVAL_CACHE) >= RETRIEVAL_CACHE_MAX_ENTRIES:
+            _RETRIEVAL_CACHE.popitem(last=False)
+        _RETRIEVAL_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(result_payload))
+
+    return result_payload
 
 
 def _parse_pubmed_xml(
     xml_text: str,
-    journals_list: Optional[List[Dict[str, str]]] = None,
+    journals_list: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
+    if not xml_text or len(xml_text) > MAX_PUBMED_XML_BYTES:
+        logger.warning("Rejected empty or oversized PubMed XML payload (%d chars).", len(xml_text or ""))
+        return results
+    # Block DTD entity expansion (Billion Laughs / XXE) before parsing
+    if re.search(r"<!\s*ENTITY\b", xml_text, flags=re.IGNORECASE):
+        logger.warning("Blocked PubMed XML containing <!ENTITY declaration.")
+        return results
+    # Strip benign <!DOCTYPE PubmedArticleSet ...> header if present without custom entities
+    sanitized_xml = re.sub(r"<!DOCTYPE[^>]*>", "", xml_text, count=1, flags=re.IGNORECASE)
     try:
-        root = ET.fromstring(xml_text)
+        root = SafeET.fromstring(sanitized_xml)
         for article_elem in root.findall(".//PubmedArticle"):
             pmid_elem = article_elem.find(".//MedlineCitation/PMID")
             if pmid_elem is None or not pmid_elem.text:
                 continue
             pmid = pmid_elem.text.strip()
+            if not pmid.isdigit():
+                continue
 
             title_elem = article_elem.find(".//Article/ArticleTitle")
             title = "".join(title_elem.itertext()).strip() if title_elem is not None else "Untitled Medical Article"
@@ -930,6 +1113,7 @@ def _parse_pubmed_xml(
                     evidence_level = "Level A (Meta-Analysis)"
                     break
 
+            pubmed_fallback = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             results.append({
                 "pmid": pmid,
                 "doi": doi or "",
@@ -941,10 +1125,10 @@ def _parse_pubmed_xml(
                 "pub_type": primary_pub_type,
                 "evidence_level": evidence_level,
                 "abstract_summary": abstract_summary,
-                "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                "doi_url": f"https://doi.org/{doi}" if doi else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "pubmed_url": pubmed_fallback,
+                "doi_url": _safe_https_doi_url(doi, pubmed_fallback),
                 "source_verification": f"Live NCBI PubMed Verified ({matched_j['short']})",
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("PubMed XML parsing failed: %s", exc)
     return results

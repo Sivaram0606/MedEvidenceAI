@@ -527,7 +527,7 @@ async def run_condition_research_pipeline(
     pub_norm = (pub_type_filter or "all").lower().strip()
     raw_queries: List[str] = []
     if clean_question:
-        q_terms, _, _ = _build_general_question_queries(f"{clean_condition} {clean_question}")
+        q_terms, _, _, _ = _build_general_question_queries(f"{clean_condition} {clean_question}")
         raw_queries.extend(q_terms)
 
     if pub_norm == "rct":
